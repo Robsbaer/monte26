@@ -7,14 +7,14 @@
     <style>
         /* ========== STYLING (Design) ========== */
         :root {
-            --ink: #1E1B4B;
-            --violet: #7C3AED;
+            --ink: #0B2545;
+            --violet: #2563EB;
             --amber: #F59E0B;
             --green: #10B981;
             --rose: #F43F5E;
             --cyan: #06B6D4;
-            --pink: #EC4899;
-            --tint: #F3F1FF;
+            --pink: #F97316;
+            --tint: #EEF4FB;
         }
 
         * { box-sizing: border-box; }
@@ -61,7 +61,7 @@
         header small {
             display: block;
             margin-top: 18px;
-            color: #C7C2F0;
+            color: #BFD3EE;
         }
 
         /* Pixel-Deko oben rechts */
@@ -112,14 +112,14 @@
             text-align: center;
             text-decoration: none;
             color: var(--ink);
-            box-shadow: 0 6px 18px rgba(30, 27, 75, 0.08);
+            box-shadow: 0 6px 18px rgba(11, 37, 69, 0.08);
             transition: transform 0.2s, box-shadow 0.2s;
             position: relative;
         }
 
         .card:hover {
             transform: translateY(-4px);
-            box-shadow: 0 10px 24px rgba(30, 27, 75, 0.16);
+            box-shadow: 0 10px 24px rgba(11, 37, 69, 0.16);
         }
 
         .card .icon {
@@ -165,12 +165,12 @@
 
         .info {
             margin-top: 12px;
-            color: #6B6894;
+            color: #5B6B85;
         }
 
         footer {
             text-align: center;
-            color: #6B6894;
+            color: #5B6B85;
             padding: 24px;
             font-size: 14px;
         }
@@ -187,7 +187,7 @@
     <header>
         <div class="inner">
             <h1>🎮 Spieleprogrammierung mit KI</h1>
-            <p>Unsere Spiele – programmiert mit Claude 🤖</p>
+            <p>Unsere Spiele, programmiert mit KI 🤖</p>
             <small>Montessori-Projekt · 13. November 2026</small>
         </div>
     </header>
@@ -232,7 +232,7 @@
         // ========================================================
         // 2️⃣ VERARBEITUNG: Kacheln bauen
         // ========================================================
-        const farben = ["#7C3AED", "#F59E0B", "#10B981", "#F43F5E", "#06B6D4", "#EC4899"];
+        const farben = ["#2563EB", "#F59E0B", "#10B981", "#F43F5E", "#06B6D4", "#F97316"];
 
         function kachel(spiel, link, farbe) {
             const a = document.createElement("a");
@@ -257,7 +257,7 @@
         const teamBereich = document.getElementById("teams");
 
         if (teams.length === 0) {
-            teamBereich.innerHTML = '<div class="hint">🚀 Hier erscheinen nach dem Workshop eure Spiele – schaut bald wieder vorbei!</div>';
+            teamBereich.innerHTML = '<div class="hint">🚀 Hier erscheinen nach dem Workshop eure Spiele. Schaut bald wieder vorbei!</div>';
         }
 
         teams.forEach((team, t) => {

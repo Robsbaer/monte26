@@ -1,7 +1,7 @@
 # 🎮 Spieleprogrammierung mit KI
 
-Dieses Projekt wurde für Kinder der Klassen 4–8 entwickelt und zeigt spielerisch, 
-wie einfache Spiele programmiert werden können – mit Unterstützung durch **Künstliche Intelligenz (KI)**.
+Dieses Projekt wurde für Kinder der Klassen 4 bis 8 entwickelt und zeigt spielerisch, 
+wie einfache Spiele programmiert werden können, mit Unterstützung durch **Künstliche Intelligenz (KI)**.
 
 📅 **Workshop 2026:** Freitag, 13. November 2026
 
@@ -12,7 +12,7 @@ wie einfache Spiele programmiert werden können – mit Unterstützung durch **K
 - Bewusster Umgang mit KI
 
 ## 🏠 Projektseite
-**Alle Spiele – Beispiele und Team-Spiele – gibt es hier zum direkten Spielen:**
+**Alle Spiele (Beispiele und Team-Spiele) gibt es hier zum direkten Spielen:**
 
 <https://robsbaer.github.io/monte26>
 
@@ -67,7 +67,7 @@ Die vorgestellten Spiele sind mit einem Stern ⭐ markiert.
 
 ### Visual Studio Code + Claude Code
 Wir verwenden **Visual Studio Code** (VS Code) als Entwicklungsumgebung und darin **Claude Code**, den KI-Programmierassistenten von Anthropic. 
-In Claude Code beschreiben wir in normaler Sprache, was unser Spiel können soll – Claude schreibt und ändert dann den Code direkt in unseren Dateien.
+In Claude Code beschreiben wir in normaler Sprache, was unser Spiel können soll. Claude schreibt und ändert dann den Code direkt in unseren Dateien.
 
 **Downloads:**
 - VS Code: <https://code.visualstudio.com>
@@ -107,5 +107,5 @@ KI kann helfen, aber sie ist nicht perfekt:
 
 ## 📬 Kontakt
 **Robert Bär**  
-Projektleitung – *Spieleprogrammierung mit KI*  
+Projektleitung *Spieleprogrammierung mit KI*  
 📧 robsmail@gmx.de
