@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spieleprogrammierung mit KI 2026</title>
+    <style>
+        /* ========== STYLING (Design) ========== */
+        :root {
+            --ink: #1E1B4B;
+            --violet: #7C3AED;
+            --amber: #F59E0B;
+            --green: #10B981;
+            --rose: #F43F5E;
+            --cyan: #06B6D4;
+            --pink: #EC4899;
+            --tint: #F3F1FF;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: var(--tint);
+            color: var(--ink);
+        }
+
+        header {
+            background: var(--ink);
+            color: white;
+            padding: 48px 24px 56px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        header .inner, main {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        header .inner {
+            padding: 0 24px;
+        }
+
+        h1, h2 {
+            font-family: "Trebuchet MS", Arial, sans-serif;
+        }
+
+        header h1 {
+            font-size: 44px;
+            margin: 0 0 8px;
+        }
+
+        header p {
+            margin: 0;
+            font-size: 20px;
+            color: var(--amber);
+        }
+
+        header small {
+            display: block;
+            margin-top: 18px;
+            color: #C7C2F0;
+        }
+
+        /* Pixel-Deko oben rechts */
+        .pixel {
+            position: absolute;
+            width: 34px;
+            height: 34px;
+        }
+
+        main {
+            padding: 32px 24px 64px;
+        }
+
+        h2 {
+            font-size: 28px;
+            margin: 40px 0 16px;
+        }
+
+        /* Team-Navigation */
+        .team-nav {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .team-nav a {
+            padding: 10px 22px;
+            border-radius: 999px;
+            color: white;
+            font-weight: bold;
+            text-decoration: none;
+            transition: transform 0.2s;
+        }
+
+        .team-nav a:hover { transform: scale(1.06); }
+
+        /* Spiele-Kacheln */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 18px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 18px;
+            padding: 22px 18px;
+            text-align: center;
+            text-decoration: none;
+            color: var(--ink);
+            box-shadow: 0 6px 18px rgba(30, 27, 75, 0.08);
+            transition: transform 0.2s, box-shadow 0.2s;
+            position: relative;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 24px rgba(30, 27, 75, 0.16);
+        }
+
+        .card .icon {
+            width: 76px;
+            height: 76px;
+            margin: 0 auto 12px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 38px;
+        }
+
+        .card .name {
+            font-weight: bold;
+            font-size: 17px;
+        }
+
+        .card .star {
+            position: absolute;
+            top: 10px;
+            right: 14px;
+            font-size: 20px;
+        }
+
+        .team {
+            scroll-margin-top: 20px;
+        }
+
+        .team h3 {
+            font-family: "Trebuchet MS", Arial, sans-serif;
+            font-size: 22px;
+            margin: 32px 0 12px;
+        }
+
+        .hint {
+            background: white;
+            border: 2px dashed var(--violet);
+            border-radius: 18px;
+            padding: 24px;
+            font-size: 17px;
+        }
+
+        .info {
+            margin-top: 12px;
+            color: #6B6894;
+        }
+
+        footer {
+            text-align: center;
+            color: #6B6894;
+            padding: 24px;
+            font-size: 14px;
+        }
+
+        footer a { color: var(--violet); }
+
+        @media (max-width: 700px) {
+            .pixel { display: none; }
+            header h1 { font-size: 32px; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="inner">
+            <h1>🎮 Spieleprogrammierung mit KI</h1>
+            <p>Unsere Spiele – programmiert mit Claude 🤖</p>
+            <small>Montessori-Projekt · 13. November 2026</small>
+        </div>
+    </header>
+
+    <main>
+        <h2>🎯 Beispiel-Spiele</h2>
+        <div class="grid" id="beispiele"></div>
+
+        <h2>👥 Eure Team-Spiele</h2>
+        <div class="team-nav" id="team-nav"></div>
+        <div id="teams"></div>
+        <p class="info">⭐ = Lieblingsspiel, das in der Game-Show vorgestellt wurde · ⌨️ Die meisten Spiele brauchen eine Tastatur.</p>
+    </main>
+
+    <footer>
+        Quellcode: <a href="https://github.com/robsbaer/monte26">github.com/robsbaer/monte26</a> ·
+        Kontakt: Robert Bär
+    </footer>
+
+    <script>
+        // ========================================================
+        // 1️⃣ EINGABEN: Hier stehen alle Spiele
+        // ========================================================
+        const beispiele = [
+            { name: "Springender Ball", icon: "🏀", datei: "ball.html" },
+            { name: "Teamgenerator", icon: "👥", datei: "teams.html" },
+            { name: "Jump & Run", icon: "🏃", datei: "jumpnrun.html" },
+            { name: "Tower Defense", icon: "🗼", datei: "tower-defense.html" }
+        ];
+
+        // Nach dem Workshop hier die Teams eintragen, zum Beispiel:
+        // {
+        //     name: "Pixel Piraten", icon: "🏴‍☠️", ordner: "Pixel-Piraten",
+        //     spiele: [
+        //         { name: "Schatzsuche", icon: "💰", datei: "schatzsuche.html", star: true },
+        //         { name: "Snake", icon: "🐍", datei: "snake.html" }
+        //     ]
+        // }
+        const teams = [
+        ];
+
+        // ========================================================
+        // 2️⃣ VERARBEITUNG: Kacheln bauen
+        // ========================================================
+        const farben = ["#7C3AED", "#F59E0B", "#10B981", "#F43F5E", "#06B6D4", "#EC4899"];
+
+        function kachel(spiel, link, farbe) {
+            const a = document.createElement("a");
+            a.className = "card";
+            a.href = link;
+            a.innerHTML =
+                (spiel.star ? '<span class="star">⭐</span>' : "") +
+                '<div class="icon" style="background:' + farbe + '22">' + spiel.icon + "</div>" +
+                '<div class="name">' + spiel.name + "</div>";
+            return a;
+        }
+
+        // ========================================================
+        // 3️⃣ AUSGABE: Alles auf die Seite bringen
+        // ========================================================
+        const beispielBereich = document.getElementById("beispiele");
+        beispiele.forEach((spiel, i) => {
+            beispielBereich.appendChild(kachel(spiel, spiel.datei, farben[i % farben.length]));
+        });
+
+        const nav = document.getElementById("team-nav");
+        const teamBereich = document.getElementById("teams");
+
+        if (teams.length === 0) {
+            teamBereich.innerHTML = '<div class="hint">🚀 Hier erscheinen nach dem Workshop eure Spiele – schaut bald wieder vorbei!</div>';
+        }
+
+        teams.forEach((team, t) => {
+            const farbe = farben[t % farben.length];
+            const id = "team-" + team.ordner;
+
+            const link = document.createElement("a");
+            link.href = "#" + id;
+            link.style.background = farbe;
+            link.textContent = team.icon + " " + team.name;
+            nav.appendChild(link);
+
+            const section = document.createElement("section");
+            section.className = "team";
+            section.id = id;
+            section.innerHTML = '<h3 style="color:' + farbe + '">' + team.icon + " " + team.name + "</h3>";
+
+            const grid = document.createElement("div");
+            grid.className = "grid";
+            team.spiele.forEach(spiel => {
+                grid.appendChild(kachel(spiel, team.ordner + "/" + spiel.datei, farbe));
+            });
+            section.appendChild(grid);
+            teamBereich.appendChild(section);
+        });
+
+        // Pixel-Deko im Kopfbereich
+        const pixel = [[2, 0, 1], [3, 0, 5], [1, 1, 0], [2, 1, 4], [0, 2, 2], [1, 2, 3], [3, 2, 0]];
+        const header = document.querySelector("header");
+        pixel.forEach(([x, y, c]) => {
+            const p = document.createElement("div");
+            p.className = "pixel";
+            p.style.right = (40 + (3 - x) * 40) + "px";
+            p.style.top = (24 + y * 40) + "px";
+            p.style.background = farben[c];
+            header.appendChild(p);
+        });
+    </script>
+</body>
+</html>
