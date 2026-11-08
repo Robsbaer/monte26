@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Mini-Fußball (Draufsicht)</title>
+<style>
+  html,body{height:100%}
+  body{margin:0;background:#12281a;color:#fff;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px;box-sizing:border-box;overflow:hidden}
+  /* Spielfeld immer komplett sichtbar: passt sich Breite UND Höhe des Fensters an */
+  canvas{border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.5);height:auto;
+    width:min(100vw - 16px, (100vh - 60px) * 960 / 580)}
+  #info{margin-top:6px;opacity:.85;text-align:center;line-height:1.4;font-size:14px}
+</style>
+</head>
+<body>
+<canvas id="c" width="960" height="580"></canvas>
+<div id="info">Pfeiltasten / WASD: laufen · <b>Leertaste halten = flacher Schuss</b> (loslassen = schießen) · <b>E halten = Hochschuss</b> · Ball am Fuß = dribbeln (automatisch) · R: neues Spiel · wer zuerst 10 Tore hat, gewinnt</div>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+// Spielfeld (Draufsicht) mit Rand drumherum
+const L = 50, R = W - 50, T = 50, B = H - 50;
+const MID = (T + B) / 2, GOAL = 160, GT = MID - GOAL / 2, GB = MID + GOAL / 2, GDEPTH = 36;
+
+const keys = {};
+addEventListener('keydown', e => {
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  keys[e.code] = true;
+  if (e.code === 'KeyR') reset();
+});
+addEventListener('keyup', e => keys[e.code] = false);
+
+const mk = (x, y, color, dir) => ({ x, y, vx: 0, vy: 0, r: 18, color, fx: dir, fy: 0, charge: 0, cooldown: 0 });
+let me, cpu, ball, score, msg, msgT, over, flash;
+let kickT = 0, kickStarter = 0; // Anstoß-Wartezeit (Frames) und wer Anstoß hat
+const KICKOFF_WAIT = 180;       // 3 Sekunden bei 60 Bildern pro Sekunde
+const CIRCLE_R = 70;            // Mittelkreis
+const isStarter = p => p === me ? kickStarter === 0 : kickStarter === 1;
+const locked = p => kickT > 0 && isStarter(p);
+const WIN = 10; // Wer zuerst 10 Tore hat, gewinnt
+
+function reset() { score = [0, 0]; over = false; msg = ''; msgT = 0; kickoff(); }
+// starter: 0 = du hast Anstoß, 1 = die KI hat Anstoß
+function kickoff(starter = 0) {
+  const cx = (L + R) / 2;
+  me = mk(L + (R - L) * 0.28, MID, '#2a6fdb', 1);
+  cpu = mk(L + (R - L) * 0.72, MID, '#e03131', -1);
+  // Wer Anstoß hat, steht am Mittelpunkt direkt hinter dem Ball
+  if (starter === 0) me.x = cx - 30; else cpu.x = cx + 30;
+  ball = { x: cx, y: MID, vx: 0, vy: 0, r: 9, hit: 0, last: null, z: 0, vz: 0 };
+  kickT = KICKOFF_WAIT; kickStarter = starter;
+}
+function goal(who) {
+  // Wer das Tor kassiert hat, bekommt den Anstoß
+  score[who]++; msg = who === 0 ? 'TOR für dich!' : 'Tor für die KI!'; msgT = 100; kickoff(1 - who);
+  if (score[who] >= WIN) over = true;
+}
+
+function movePlayer(p, ax, ay, accel = 0.65) {
+  const len = Math.hypot(ax, ay);
+  if (len > 0) {
+    ax /= len; ay /= len;
+    p.vx += ax * accel; p.vy += ay * accel;
+    // Blickrichtung weich in Laufrichtung drehen
+    p.fx += (ax - p.fx) * 0.25; p.fy += (ay - p.fy) * 0.25;
+    const fl = Math.hypot(p.fx, p.fy) || 1; p.fx /= fl; p.fy /= fl;
+  }
+  p.vx *= 0.88; p.vy *= 0.88;
+  p.x = Math.max(L + p.r, Math.min(R - p.r, p.x + p.vx));
+  p.y = Math.max(T + p.r, Math.min(B - p.r, p.y + p.vy));
+  if (p.cooldown > 0) p.cooldown--;
+}
+
+const reach = p => p.r + ball.r + 8;
+const near = p => Math.hypot(ball.x - p.x, ball.y - p.y) < reach(p);
+
+// Schuss: Ball fliegt mit Kraft 0..1 in Richtung (dx,dy)
+// lob = true: Hochschuss (Ball fliegt in der Luft, über Spieler hinweg)
+const PLAYER_H = 24, GRAV = 0.35, BAR = 50; // Spielerhöhe, Schwerkraft, Torlatten-Höhe
+function kick(p, dx, dy, power, lob = false) {
+  if (!near(p) || p.cooldown > 0 || ball.z > PLAYER_H) return false;
+  const d = Math.hypot(dx, dy) || 1, speed = lob ? 8 + power * 8 : 7 + power * 14;
+  ball.vx = dx / d * speed; ball.vy = dy / d * speed;
+  ball.vz = lob ? 4 + power * 2.8 : 0;
+  p.cooldown = 25; ball.hit = 8; ball.last = p === me ? 0 : 1;
+  return true;
+}
+
+// Sanftes Anstupsen beim Laufen (Dribbeln)
+function touch(p) {
+  if (ball.z > PLAYER_H) return; // Ball fliegt über den Spieler hinweg
+  const dx = ball.x - p.x, dy = ball.y - p.y, d = Math.hypot(dx, dy), min = p.r + ball.r;
+  if (d < min && d > 0) {
+    const nx = dx / d, ny = dy / d;
+    ball.x = p.x + nx * min; ball.y = p.y + ny * min;
+    ball.last = p === me ? 0 : 1; // wer den Ball zuletzt berührt hat
+    // Geschwindigkeit des Balls relativ zum Spieler, entlang der Stoßrichtung
+    const rvx = ball.vx - p.vx, rvy = ball.vy - p.vy;
+    const vn = rvx * nx + rvy * ny; // < 0: Ball fliegt auf den Spieler zu
+    if (vn < -2.5) {
+      // Schneller Ball: prallt am Spieler ab und verliert Tempo
+      const e = 0.65;
+      ball.vx = p.vx + (rvx - (1 + e) * vn * nx);
+      ball.vy = p.vy + (rvy - (1 + e) * vn * ny);
+    } else {
+      // Langsamer Ball: sanftes Dribbeln
+      ball.vx += (nx * 3 + p.vx * 0.6 - ball.vx) * 0.5;
+      ball.vy += (ny * 3 + p.vy * 0.6 - ball.vy) * 0.5;
+    }
+  }
+}
+
+function update() {
+  if (over) return;
+
+  // Spieler 1
+  const ax = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0);
+  const ay = (keys.ArrowDown || keys.KeyS ? 1 : 0) - (keys.ArrowUp || keys.KeyW ? 1 : 0);
+  movePlayer(me, locked(me) ? 0 : ax, locked(me) ? 0 : ay);
+  // Schuss: Leertaste = flach, E = Hochschuss (halten = aufladen, loslassen = schießen)
+  if (locked(me)) { me.charge = 0; me.lobMode = false; }
+  else if (keys.Space || keys.KeyE) {
+    me.charge = Math.min(1, me.charge + 1 / 50);
+    if (keys.KeyE) me.lobMode = true;
+  } else if (me.charge > 0) {
+    kick(me, me.fx, me.fy, me.charge, !!me.lobMode);
+    me.charge = 0; me.lobMode = false;
+  }
+  // Ballbesitz / Dribbeln (automatisch): Wer den Ball erreicht, hat ihn am Fuß.
+  // Er bleibt vor dem Spieler in Laufrichtung, bis geschossen wird oder der Gegner ihn wegstößt.
+  if (me.grabCd > 0) me.grabCd--;
+  const dm = Math.hypot(ball.x - me.x, ball.y - me.y);
+  const ballSpeed = Math.hypot(ball.vx - me.vx, ball.vy - me.vy);
+  if (!me.has && ball.z === 0 && me.cooldown === 0 && !me.grabCd && dm < reach(me) && ballSpeed < 6) me.has = true;
+  if (me.has && (ball.z > 0 || me.cooldown > 0 || dm > reach(me) + 16 || near(cpu))) {
+    if (near(cpu)) me.grabCd = 40; // Gegner hat den Ball erobert
+    me.has = false;
+  }
+  if (me.has) {
+    const gap = me.r + ball.r + 3;
+    ball.x += (me.x + me.fx * gap - ball.x) * 0.35;
+    ball.y += (me.y + me.fy * gap - ball.y) * 0.35;
+    ball.vx = me.vx; ball.vy = me.vy; ball.last = 0;
+  }
+
+  // KI
+  // Schwierigkeit: kleinere Werte = leichtere KI
+  const CPU_SPEED = 0.36;      // Laufgeschwindigkeit (Spieler: 0.65)
+  const CPU_REACTION = 0.04;   // wie träge sie dem Ball folgt (1 = sofort)
+  const CPU_AIM_ERROR = 260;   // Ungenauigkeit beim Schuss (in Pixeln)
+  const CPU_KICK_CHANCE = 0.25;// Chance pro Frame, dass sie bei Ballkontakt schießt
+  cpu.seenX = (cpu.seenX ?? ball.x) + (ball.x - cpu.seenX) * CPU_REACTION || ball.x;
+  cpu.seenY = (cpu.seenY ?? ball.y) + (ball.y - cpu.seenY) * CPU_REACTION || ball.y;
+  const ballBehind = cpu.x > cpu.seenX + 6;
+  let tx, ty;
+  if (ballBehind) { tx = cpu.seenX + 14; ty = cpu.seenY; }
+  else { tx = cpu.seenX + 60; ty = cpu.seenY + (cpu.seenY < MID ? 60 : -60); }
+  const dx = tx - cpu.x, dy = ty - cpu.y, dd = Math.hypot(dx, dy);
+  const cl = locked(cpu);
+  movePlayer(cpu, !cl && dd > 8 ? dx / dd : 0, !cl && dd > 8 ? dy / dd : 0, CPU_SPEED);
+  if (!cl && near(cpu) && cpu.x > ball.x - 4 && Math.random() < CPU_KICK_CHANCE) {
+    // Richtung Tor des Spielers, aber ungenau und eher schwach
+    kick(cpu, L - ball.x, MID + (Math.random() - 0.5) * CPU_AIM_ERROR - ball.y, 0.2 + Math.random() * 0.3);
+  }
+
+  // Anstoß: Der Gegner darf sich bewegen, muss aber außerhalb des Mittelkreises bleiben.
+  // Der Ball bleibt liegen, bis die 3 Sekunden um sind.
+  if (kickT > 0) {
+    kickT--; if (msgT > 0) msgT--;
+    for (const p of [me, cpu]) {
+      if (isStarter(p)) continue; // Spieler mit Anstoß darf im Kreis stehen
+      const cx = (L + R) / 2, ddx = p.x - cx, ddy = p.y - MID, d = Math.hypot(ddx, ddy), min = CIRCLE_R + p.r + 2;
+      if (d < min) {
+        const nx = d > 0 ? ddx / d : (p === me ? -1 : 1), ny = d > 0 ? ddy / d : 0;
+        p.x = cx + nx * min; p.y = MID + ny * min;
+      }
+    }
+    return;
+  }
+  if (!me.has) touch(me);
+  touch(cpu);
+
+  // Ball bewegen
+  ball.x += ball.vx; ball.y += ball.vy;
+  const air = ball.z > 0 || ball.vz > 0;
+  const fr = air ? 0.998 : 0.987;
+  ball.vx *= fr; ball.vy *= fr;
+  if (Math.hypot(ball.vx, ball.vy) < 0.05) ball.vx = ball.vy = 0;
+  // Höhe: Schwerkraft, am Boden federt der Ball noch etwas
+  if (air) {
+    ball.z += ball.vz; ball.vz -= GRAV;
+    if (ball.z <= 0) {
+      ball.z = 0;
+      ball.vz = ball.vz < -2 ? -ball.vz * 0.45 : 0;
+      ball.vx *= 0.8; ball.vy *= 0.8;
+    }
+  }
+  if (ball.hit > 0) ball.hit--;
+
+  // Tor nur, wenn der Ball unter der Latte ist (Hochschuss drüber = kein Tor)
+  const inMouth = ball.y > GT + ball.r && ball.y < GB - ball.r && ball.z < BAR;
+  // Oben / unten: abprallen
+  if (ball.y < T + ball.r) { ball.y = T + ball.r; ball.vy *= -0.85; }
+  if (ball.y > B - ball.r) { ball.y = B - ball.r; ball.vy *= -0.85; }
+  // Links / rechts: Tor oder abprallen
+  if (ball.x < L + ball.r) {
+    if (inMouth) { if (ball.x < L - ball.r) return goal(1); } // linkes Tor (deins): Punkt für die KI
+    else { ball.x = L + ball.r; ball.vx *= -0.85; }
+  }
+  if (ball.x > R - ball.r) {
+    if (inMouth) { if (ball.x > R + ball.r) return goal(0); } // rechtes Tor (KI): Punkt für dich
+    else { ball.x = R - ball.r; ball.vx *= -0.85; }
+  }
+  if (msgT > 0) msgT--;
+}
+
+function drawPlayer(p) {
+  const ang = Math.atan2(p.fy, p.fx);
+  ctx.save(); ctx.translate(p.x, p.y);
+  // Schatten
+  ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(3, 4, p.r, p.r * .9, 0, 0, 7); ctx.fill();
+  ctx.rotate(ang);
+  // Schultern (Ellipse quer zur Blickrichtung)
+  ctx.fillStyle = p.color; ctx.beginPath(); ctx.ellipse(0, 0, p.r * .75, p.r, 0, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+  // Kopf
+  ctx.fillStyle = '#f1c27d'; ctx.beginPath(); ctx.arc(2, 0, p.r * .45, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#6b4a1e'; ctx.lineWidth = 1.5; ctx.stroke();
+  // Fuß in Blickrichtung
+  ctx.fillStyle = '#111'; ctx.beginPath(); ctx.ellipse(p.r + 3, 0, 6, 4, 0, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
+function drawGoal(x, dir) { // dir: -1 links, +1 rechts
+  ctx.fillStyle = 'rgba(255,255,255,.12)';
+  ctx.fillRect(dir < 0 ? x - GDEPTH : x, GT, GDEPTH, GOAL);
+  ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 1;
+  for (let i = 0; i <= GDEPTH; i += 9) { const gx = dir < 0 ? x - i : x + i; ctx.beginPath(); ctx.moveTo(gx, GT); ctx.lineTo(gx, GB); ctx.stroke(); }
+  for (let y = GT; y <= GB; y += 10) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + dir * GDEPTH, y); ctx.stroke(); }
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(x, GT); ctx.lineTo(x + dir * GDEPTH, GT); ctx.lineTo(x + dir * GDEPTH, GB); ctx.lineTo(x, GB); ctx.stroke();
+}
+
+function draw() {
+  // Umgebung
+  ctx.fillStyle = '#1d4d2a'; ctx.fillRect(0, 0, W, H);
+  // Rasenstreifen
+  const sw = (R - L) / 12;
+  for (let i = 0; i < 12; i++) { ctx.fillStyle = i % 2 ? '#2e8b3d' : '#35984a'; ctx.fillRect(L + i * sw, T, sw, B - T); }
+  // Linien
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+  ctx.strokeRect(L, T, R - L, B - T);
+  ctx.beginPath(); ctx.moveTo((L + R) / 2, T); ctx.lineTo((L + R) / 2, B); ctx.stroke();
+  ctx.beginPath(); ctx.arc((L + R) / 2, MID, 70, 0, 7); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc((L + R) / 2, MID, 4, 0, 7); ctx.fill();
+  ctx.strokeRect(L, MID - 130, 130, 260); ctx.strokeRect(R - 130, MID - 130, 130, 260);
+  ctx.strokeRect(L, MID - 65, 50, 130); ctx.strokeRect(R - 50, MID - 65, 50, 130);
+  drawGoal(L, -1); drawGoal(R, 1);
+
+  // Ball (mit Schatten, Fünfeck-Optik, Drehung)
+  // In der Luft: Schatten bleibt am Boden, Ball wird größer und rückt nach oben
+  const drawBall = () => {
+    const br = ball.r * (1 + ball.z / 45), by = ball.y - ball.z * 0.6;
+    ctx.fillStyle = `rgba(0,0,0,${Math.max(.12, .3 - ball.z / 250)})`;
+    ctx.beginPath(); ctx.ellipse(ball.x + 2, ball.y + 3, ball.r, ball.r * .9, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ball.x, by, br, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#222'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(ball.x, by, br * .35, 0, 7); ctx.fill();
+  };
+  const ballHigh = ball.z > PLAYER_H;
+  if (!ballHigh) drawBall();
+  drawPlayer(me); drawPlayer(cpu);
+  if (ballHigh) drawBall(); // fliegt über den Spielern
+
+  // Ziellinie + Ladebalken beim Aufladen
+  if (me.charge > 0) {
+    const len = 30 + me.charge * 140;
+    ctx.strokeStyle = `rgba(255,255,255,${0.35 + me.charge * 0.5})`; ctx.lineWidth = 3; ctx.setLineDash([8, 8]);
+    ctx.beginPath(); ctx.moveTo(me.x + me.fx * 24, me.y + me.fy * 24); ctx.lineTo(me.x + me.fx * len, me.y + me.fy * len); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(me.x - 25, me.y - 36, 50, 8);
+    ctx.fillStyle = me.lobMode ? `hsl(${200 + me.charge * 40},90%,60%)` : `hsl(${120 - me.charge * 120},90%,50%)`; ctx.fillRect(me.x - 25, me.y - 36, 50 * me.charge, 8);
+  }
+
+  // HUD
+  ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(W / 2 - 120, 0, 240, 40);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 26px system-ui'; ctx.textAlign = 'center';
+  ctx.fillText(`${score[0]} : ${score[1]}`, W / 2, 29);
+  if (kickT > 0) {
+    ctx.font = 'bold 40px system-ui'; ctx.strokeStyle = '#000'; ctx.lineWidth = 5;
+    const txt = `Anstoß ${kickStarter === 0 ? 'für dich' : 'für die KI'}: ${Math.ceil(kickT / 60)}`;
+    ctx.strokeText(txt, W / 2, MID - 150); ctx.fillText(txt, W / 2, MID - 150);
+  }
+  if (msgT > 0) { ctx.font = 'bold 52px system-ui'; ctx.strokeStyle = '#000'; ctx.lineWidth = 6; ctx.strokeText(msg, W / 2, MID - 110); ctx.fillText(msg, W / 2, MID - 110); }
+  if (over) {
+    ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 56px system-ui';
+    ctx.fillText(score[0] > score[1] ? 'Du gewinnst!' : 'Die KI gewinnt!', W / 2, H / 2 - 10);
+    ctx.font = '24px system-ui'; ctx.fillText(`Endstand ${score[0]} : ${score[1]}  ·  R für Revanche`, W / 2, H / 2 + 40);
+  }
+}
+
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+reset(); loop();
+</script>
+</body>
+</html>

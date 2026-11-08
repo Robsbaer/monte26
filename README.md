@@ -20,8 +20,9 @@ wie einfache Spiele programmiert werden können, mit Unterstützung durch **Kün
 Die vorbereiteten Spiele können direkt im Browser gespielt werden:
 - 🎯 **Springender Ball:** <https://robsbaer.github.io/monte26/ball.html>
 - 👥 **Teamgenerator:** <https://robsbaer.github.io/monte26/teams.html>
-- 🏃 **Jump'n'Run:** <https://robsbaer.github.io/monte26/jumpnrun.html>
 - 🗼 **Tower Defense:** <https://robsbaer.github.io/monte26/tower-defense.html>
+- ⚽ **Mini-Fußball:** <https://robsbaer.github.io/monte26/fussball.html>
+- 🏟️ **Fußball-Arena:** <https://robsbaer.github.io/monte26/fussball-arena.html>
 
 ## 🎮 Team-Spiele
 
@@ -41,8 +42,9 @@ Die vorgestellten Spiele sind mit einem Stern ⭐ markiert.
 ├── index.html              # Projektseite mit allen Spielen
 ├── ball.html               # Springender Ball (p5.js)
 ├── teams.html              # Teamgenerator
-├── jumpnrun.html           # Jump'n'run Beispiel
 ├── tower-defense.html      # Tower Defense Beispiel
+├── fussball.html           # Mini-Fußball (Draufsicht)
+├── fussball-arena.html     # Fußball-Arena
 ├── <Team-Name>/            # Ein Ordner pro Team (entsteht im Workshop)
 ├── Dokumente/
 │   ├── Folien.pptx         # PowerPoint-Präsentation
