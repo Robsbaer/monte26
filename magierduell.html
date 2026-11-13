@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Magierduell</title>
+<style>
+  html,body{margin:0;height:100%;background:#0d0b1a;color:#eee;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  canvas{background:#161230;border:2px solid #3b2f7a;border-radius:8px;cursor:crosshair;max-width:96vw;touch-action:none}
+  p{margin:8px;font-size:14px;color:#aab}
+</style>
+</head>
+<body>
+<canvas id="c" width="960" height="540"></canvas>
+<p>Pfeiltasten: bewegen · Maustaste halten und zeichnen · Loslassen: Zauber wird gewirkt (Richtung = Mauszeiger). Je länger die Zeichnung, desto mehr Schaden (aber langsamer & längere Abklingzeit).</p>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const MIN_INK = 25;
+const dmgOf = len => Math.min(20, Math.round(3 + len * 0.075))   // max. 20 Schaden (ab ca. 227 px);          // 5 .. 42
+const cdOf = len => Math.min(1.5, 0.5 + len / 300);   // Abklingzeit in Sekunden
+const speedOf = len => Math.max(220, 820 - len * 0.6);                   // langsamer bei grossen Zaubern
+
+// Zeichnung glaetten: gleichmaessig neu abtasten und Zittern herausfiltern
+function pathLen(p) { let l = 0; for (let i = 1; i < p.length; i++) l += Math.hypot(p[i].x - p[i-1].x, p[i].y - p[i-1].y); return l; }
+function smooth(pts) {
+  if (pts.length < 3) return pts;
+  const STEP = 4, out = [{x: pts[0].x, y: pts[0].y}];
+  let need = STEP;
+  for (let i = 1; i < pts.length; i++) {
+    let a = pts[i-1], b = pts[i], seg = Math.hypot(b.x - a.x, b.y - a.y), pos = 0;
+    while (seg - pos >= need) {
+      pos += need; need = STEP;
+      const k = pos / seg; out.push({x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k});
+    }
+    need -= seg - pos;
+  }
+  const e = pts[pts.length - 1]; out.push({x: e.x, y: e.y});
+  for (let it = 0; it < 4; it++) {
+    const prev = out.map(p => ({x: p.x, y: p.y}));
+    for (let i = 1; i < out.length - 1; i++) {
+      out[i].x = (prev[i-1].x + 2 * prev[i].x + prev[i+1].x) / 4;
+      out[i].y = (prev[i-1].y + 2 * prev[i].y + prev[i+1].y) / 4;
+    }
+  }
+  return out;
+}
+
+const keys = {};
+let state = 'menu', msg = '';
+let projectiles = [], particles = [];
+
+const SKINS = [
+  {name: 'Himmelblau', c: '#5aa9ff', h: '#2a6fd0', g: '#ffe58a'},
+  {name: 'Feuerrot',   c: '#ff6a5a', h: '#b22a1e', g: '#ffd24a'},
+  {name: 'Waldgrün',   c: '#5fd47a', h: '#2a8a45', g: '#e8ff8a'},
+  {name: 'Amethyst',   c: '#b07aff', h: '#6a3bc0', g: '#ff9aef'},
+  {name: 'Gold',       c: '#f2c14e', h: '#b5851a', g: '#ffffff'},
+  {name: 'Schatten',   c: '#5b5f78', h: '#2a2c3d', g: '#7af0ff'},
+];
+const SPECIAL = [
+  {id: 'frieren', name: 'Frieren', c: '#3d9bff', h: '#3d9bff', g: '#ffd24a', special: true},
+];
+let selP = SKINS[0], selB = SKINS[1], specialRow = 0, now = 0;
+function mkWizard(x, skin, isBot) {
+  return {x, y: H/2, r: 22, hp: 100, color: skin.c, skin, isBot, cd: 0, hitFlash: 0, vy: 0, moving: false};
+}
+let player, bot, drawing, mouse = {x: W/2, y: H/2};
+
+function reset() {
+  player = mkWizard(120, selP, false);
+  bot = mkWizard(W - 120, selB, true);
+  bot.ai = {think: 1, tx: bot.y, drawing: null, wait: 1.2};
+  projectiles = []; particles = []; drawing = null; state = 'play'; msg = '';
+}
+reset(); state = 'menu';
+
+addEventListener('keydown', e => {
+  if (e.key.startsWith('Arrow')) { keys[e.key] = true; e.preventDefault(); }
+  if (state === 'menu' && (e.key === 'Enter' || e.key === ' ')) reset();
+  else if (state === 'over' && (e.key === 'Enter' || e.key === ' ')) reset();
+  else if (state !== 'menu' && (e.key === 'm' || e.key === 'M' || e.key === 'Escape')) { drawing = null; state = 'menu'; }
+});
+addEventListener('keyup', e => { keys[e.key] = false; });
+
+function pos(e) {
+  const r = cv.getBoundingClientRect();
+  return {x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height};
+}
+cv.addEventListener('pointerdown', e => {
+  mouse = pos(e);
+  if (state === 'menu') { menuClick(mouse); return; }
+  if (state === 'special') { specialClick(mouse); return; }
+  if (state !== 'play') { reset(); return; }
+  if (player.cd > 0) return;
+  cv.setPointerCapture(e.pointerId);
+  drawing = {pts: [mouse], sm: [mouse], len: 0};
+});
+cv.addEventListener('pointermove', e => {
+  mouse = pos(e);
+  if (!drawing) return;
+  const last = drawing.pts[drawing.pts.length - 1];
+  const d = Math.hypot(mouse.x - last.x, mouse.y - last.y);
+  if (d < 3) return;
+  drawing.pts.push(mouse);
+  drawing.sm = smooth(drawing.pts);
+  drawing.len = pathLen(drawing.sm);
+});
+function release() {
+  if (!drawing) return;
+  const d = drawing; drawing = null;
+  if (state !== 'play' || d.len < MIN_INK) return;
+  let tx = mouse.x, ty = mouse.y;
+  if (Math.hypot(tx - player.x, ty - player.y) < 40) { tx = bot.x; ty = bot.y; }
+  cast(player, d.pts, d.len, tx, ty);
+}
+cv.addEventListener('pointerup', release);
+cv.addEventListener('pointercancel', release);
+
+function cast(w, rawPts, rawLen, tx, ty) {
+  const pts = smooth(rawPts), len = pathLen(pts);
+  const dmg = dmgOf(len);
+  // Form in Originalgroesse um den Schwerpunkt
+  let cx = 0, cy = 0; pts.forEach(p => { cx += p.x; cy += p.y; }); cx /= pts.length; cy /= pts.length;
+  let m = 1; pts.forEach(p => { m = Math.max(m, Math.hypot(p.x - cx, p.y - cy)); });
+  const shape = pts.map(p => ({x: p.x - cx, y: p.y - cy}));
+  // Automatisch auf den Gegner zielen
+  const t = w.isBot ? player : bot;
+  let dx = t.x - w.x, dy = t.y - w.y;
+  if (w.isBot) { dy = ty - w.y; }          // Bot nutzt seinen Vorhalt
+  const dl = Math.hypot(dx, dy) || 1, sp = speedOf(len);
+  projectiles.push({x: w.x + dx / dl * 30, y: w.y + dy / dl * 30, vx: dx / dl * sp, vy: dy / dl * sp,
+    dmg, m, shape, owner: w, color: w.color});
+  w.cd = cdOf(len);
+  burst(w.x, w.y, w.color, 8);
+}
+
+function touches(p, x, y, rad) {
+  for (const s of p.shape) if (Math.hypot(p.x + s.x - x, p.y + s.y - y) < rad) return true;
+  return false;
+}
+function shapesTouch(a, b) {
+  for (const s of a.shape) if (touches(b, a.x + s.x, a.y + s.y, 7)) return true;
+  return false;
+}
+
+function burst(x, y, color, n, s = 140) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 6.283, v = Math.random() * s;
+    particles.push({x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.5 + Math.random() * 0.4, color});
+  }
+}
+
+function moveWizard(w, dx, dy, dt) {
+  w.moving = dx !== 0 || dy !== 0;
+  const sp = 230, minX = w.isBot ? W/2 + 20 : 30, maxX = w.isBot ? W - 30 : W/2 - 20;
+  w.x = Math.max(minX, Math.min(maxX, w.x + dx * sp * dt));
+  w.y = Math.max(30, Math.min(H - 30, w.y + dy * sp * dt));
+}
+
+// ---------- Bot ----------
+function botAI(dt) {
+  const ai = bot.ai;
+  // Ausweichen
+  let threat = null;
+  for (const p of projectiles) if (p.owner === player && p.vx > 0 && p.x < bot.x) {
+    const t = (bot.x - p.x) / p.vx, yy = p.y + p.vy * t;
+    if (Math.abs(yy - bot.y) < bot.r + p.r + 12 && (!threat || t < threat.t)) threat = {t, yy};
+  }
+  let dx = 0, dy = 0;
+  if (threat && threat.t < 1.4) {
+    dy = bot.y >= threat.yy ? 1 : -1;
+    if (bot.y < 70) dy = 1; if (bot.y > H - 70) dy = -1;
+    dy *= 0.9;
+  } else {
+    ai.think -= dt;
+    if (ai.think <= 0) { ai.think = 0.6 + Math.random() * 1.2; ai.tx = 40 + Math.random() * (H - 80); ai.dx = (Math.random() - 0.5) * 1.4; }
+    if (Math.abs(ai.tx - bot.y) > 8) dy = Math.sign(ai.tx - bot.y) * 0.6;
+    dx = (ai.dx || 0) * 0.5;
+  }
+  moveWizard(bot, dx, dy, dt);
+
+  // Zaubern: Zeichnen in Etappen
+  if (ai.drawing) {
+    const d = ai.drawing;
+    d.t += dt;
+    const target = d.target, add = 650 * dt;
+    let left = add;
+    while (left > 0 && d.len < target) {
+      d.ang += (Math.random() - 0.5) * 0.9;
+      const step = Math.min(left, 8);
+      d.cx += Math.cos(d.ang) * step; d.cy += Math.sin(d.ang) * step;
+      // zurück zur Mitte ziehen
+      d.cx += (bot.x - 40 - d.cx) * 0.02; d.cy += (bot.y - d.cy) * 0.02;
+      d.pts.push({x: d.cx, y: d.cy}); d.len += step; left -= step;
+    }
+    if (d.len >= target) {
+      // Zielvorhalt
+      const dist = Math.abs(bot.x - player.x), sp = speedOf(d.len), t = dist / sp;
+      const pvy = (keys.ArrowUp ? -1 : 0) + (keys.ArrowDown ? 1 : 0);
+      const ty = player.y + pvy * 230 * t * 0.6 + (Math.random() - 0.5) * 90;
+      cast(bot, d.pts, d.len, player.x, ty);
+      ai.drawing = null; ai.wait = 0.2 + Math.random() * 0.7;
+    }
+  } else if (bot.cd <= 0) {
+    ai.wait -= dt;
+    if (ai.wait <= 0) {
+      const target = 60 + Math.random() * 440;
+      ai.drawing = {pts: [], len: 0, target, t: 0, ang: Math.random() * 6.28, cx: bot.x - 40, cy: bot.y};
+      ai.drawing.pts.push({x: ai.drawing.cx, y: ai.drawing.cy});
+    }
+  }
+}
+
+// ---------- Update ----------
+function update(dt) {
+  const dx = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0);
+  const dy = (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0);
+  if (state === 'play') { moveWizard(player, dx, dy, dt); botAI(dt); }
+  [player, bot].forEach(w => { w.cd = Math.max(0, w.cd - dt); w.hitFlash = Math.max(0, w.hitFlash - dt); });
+
+  for (const p of projectiles) { p.x += p.vx * dt; p.y += p.vy * dt; }
+
+  // Zauber gegen Zauber
+  for (let i = 0; i < projectiles.length; i++) for (let j = i + 1; j < projectiles.length; j++) {
+    const a = projectiles[i], b = projectiles[j];
+    if (a.dead || b.dead || a.owner === b.owner) continue;
+    if (Math.hypot(a.x - b.x, a.y - b.y) < a.m + b.m + 10 && shapesTouch(a, b)) {
+      burst((a.x + b.x) / 2, (a.y + b.y) / 2, '#fff', 14, 200);
+      if (a.dmg === b.dmg) {            // gleich stark: der Groessere bleibt
+        if (a.m > b.m) b.dead = true;
+        else if (b.m > a.m) a.dead = true;
+        else a.dead = b.dead = true;
+      } else {                          // sonst: Staerkerer bleibt mit Restschaden
+        const da = a.dmg, db = b.dmg;
+        a.dmg -= db; b.dmg -= da;
+        if (a.dmg <= 0) a.dead = true;
+        if (b.dmg <= 0) b.dead = true;
+      }
+    }
+  }
+  // Treffer
+  for (const p of projectiles) {
+    if (p.dead) continue;
+    const t = p.owner === player ? bot : player;
+    if (Math.hypot(p.x - t.x, p.y - t.y) < p.m + t.r + 4 && touches(p, t.x, t.y, t.r)) {
+      t.hp = Math.max(0, t.hp - p.dmg); t.hitFlash = 0.25; p.dead = true;
+      burst(p.x, p.y, p.color, 10 + p.dmg, 200);
+      floaters.push({x: t.x, y: t.y - 30, txt: '-' + p.dmg, life: 1});
+    }
+    if (p.x < -p.m - 50 || p.x > W + p.m + 50 || p.y < -p.m - 50 || p.y > H + p.m + 50) p.dead = true;
+  }
+  projectiles = projectiles.filter(p => !p.dead);
+
+  for (const q of particles) { q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt; }
+  particles = particles.filter(q => q.life > 0);
+  for (const f of floaters) { f.y -= 30 * dt; f.life -= dt; }
+  floaters = floaters.filter(f => f.life > 0);
+
+  if (state === 'play' && (player.hp <= 0 || bot.hp <= 0)) {
+    state = 'over'; drawing = null;
+    msg = bot.hp <= 0 ? 'Du hast gewonnen!' : 'Du wurdest besiegt!';
+  }
+}
+let floaters = [];
+
+// ---------- Zeichnen ----------
+function strokePath(pts, color, width, alpha = 1) {
+  if (pts.length < 2) return;
+  ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineJoin = ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke(); ctx.globalAlpha = 1;
+}
+function drawWizardAt(x, y, sk, isBot, flash, sc = 1, moving = false) {
+  if (sk.id === 'frieren') return drawFrieren(x, y, isBot, flash, sc, moving);
+  ctx.save(); ctx.translate(x, y); ctx.scale(sc, sc);
+  const f = isBot ? -1 : 1;
+  ctx.fillStyle = flash ? '#fff' : sk.c;
+  ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(22, 24); ctx.lineTo(-22, 24); ctx.closePath(); ctx.fill();      // Robe
+  ctx.fillStyle = '#f3d2b0'; ctx.beginPath(); ctx.arc(0, -14, 9, 0, 7); ctx.fill();                               // Kopf
+  ctx.fillStyle = flash ? '#fff' : sk.h; ctx.beginPath(); ctx.moveTo(-14, -18); ctx.lineTo(0, -48); ctx.lineTo(14, -18); ctx.closePath(); ctx.fill(); // Hut
+  ctx.strokeStyle = '#c9a15a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(f * 20, 20); ctx.lineTo(f * 26, -22); ctx.stroke(); // Stab
+  ctx.fillStyle = sk.g; ctx.beginPath(); ctx.arc(f * 26, -24, 4, 0, 7); ctx.fill();
+  ctx.restore();
+}
+function drawWizard(w) { drawWizardAt(w.x, w.y, w.skin, w.isBot, w.hitFlash > 0, 1, w.moving && state === 'play'); }
+
+function drawFrieren(x, y, isBot, flash, sc, moving) {
+  const f = isBot ? -1 : 1, ph = now * 10;
+  const bob = moving ? -Math.abs(Math.sin(ph)) * 3 : Math.sin(now * 2) * 1.2;
+  const step = moving ? Math.sin(ph) : 0;
+  const trail = moving ? f * 0.45 + Math.sin(ph) * 0.1 : Math.sin(now * 1.6) * 0.06;
+  const blink = (now % 4.2) < 0.14;
+  const HAIR = '#f1f3fb', HAIR_O = '#a9b3cf', SKIN = '#f9e8da', SKIN_O = '#d9b9a3', GOLD = '#d9b35c',
+        DARK = '#25253a', WHITE = '#f6f7fc', BROWN = '#6b4a2a';
+  ctx.save(); ctx.translate(x, y + bob); ctx.scale(sc, sc);
+  if (flash) ctx.filter = 'brightness(3)';
+  ctx.lineJoin = ctx.lineCap = 'round';
+
+  // --- lange Zöpfe (fliessend, Spitzen schwingen staerker) ---
+  for (const sd of [-1, 1]) {
+    ctx.save(); ctx.translate(sd * 10, -27);
+    const N = 14, len = 58, L = [], R = [], C = [];
+    let px = 0, py = 0;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const a = Math.PI / 2 - sd * 0.16 + trail * t * 1.7 + Math.sin(now * 2.2 - t * 3 + sd) * 0.07 * t * (moving ? 2.2 : 1);
+      if (i > 0) { px += Math.cos(a) * len / N; py += Math.sin(a) * len / N; }
+      const w = 5.6 * Math.pow(1 - t, 0.55) + 0.3, nx = -Math.sin(a), ny = Math.cos(a);
+      L.push([px + nx * w, py + ny * w]); R.push([px - nx * w, py - ny * w]); C.push([px, py]);
+    }
+    ctx.fillStyle = HAIR; ctx.strokeStyle = HAIR_O; ctx.lineWidth = 0.9;
+    ctx.beginPath(); L.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+    for (let i = N; i >= 0; i--) ctx.lineTo(R[i][0], R[i][1]);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#cfd6ea'; ctx.lineWidth = 0.6;               // Haarstraehnen
+    for (const o of [-0.35, 0.3]) {
+      ctx.beginPath();
+      for (let i = 1; i < N - 1; i++) { const q = [C[i][0] + (L[i][0] - C[i][0]) * o, C[i][1] + (L[i][1] - C[i][1]) * o]; i > 1 ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); }
+      ctx.stroke();
+    }
+    ctx.fillStyle = DARK; ctx.fillRect(-4, -1, 8, 4);               // Haarband
+    ctx.fillStyle = GOLD; ctx.beginPath(); ctx.arc(0, 1, 1.5, 0, 7); ctx.fill();
+    ctx.restore();
+  }
+
+  // --- Beine & Stiefel ---
+  const lift = [Math.max(0, step) * 5, Math.max(0, -step) * 5];
+  [-1, 1].forEach((sd, k) => {
+    ctx.fillStyle = DARK; ctx.fillRect(sd * 3.5 - 2.6, 17, 5.2, 8 - lift[k] * 0.3);
+    ctx.fillStyle = BROWN; ctx.beginPath();
+    ctx.moveTo(sd * 3.5 - 3.4, 23 - lift[k]); ctx.lineTo(sd * 3.5 + 3.4, 23 - lift[k]);
+    ctx.lineTo(sd * 3.5 + 4.2, 28 - lift[k]); ctx.lineTo(sd * 3.5 - 4.2, 28 - lift[k]); ctx.closePath(); ctx.fill();
+  });
+
+  // --- Rock, Mantel ---
+  const hem = moving ? Math.sin(ph) * 2.2 : Math.sin(now * 1.8) * 0.5;
+  ctx.fillStyle = DARK; ctx.beginPath();
+  ctx.moveTo(-12, 6); ctx.lineTo(12, 6); ctx.lineTo(16, 21); ctx.lineTo(-16, 21); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-6, -10); ctx.lineTo(6, -10); ctx.lineTo(7, 8); ctx.lineTo(-7, 8); ctx.closePath(); ctx.fill();   // schwarzes Hemd
+  ctx.fillStyle = GOLD; for (const by of [-5, 0, 5]) { ctx.beginPath(); ctx.arc(0, by, 1, 0, 7); ctx.fill(); }
+  ctx.fillStyle = WHITE; ctx.strokeStyle = GOLD; ctx.lineWidth = 1.6;
+  for (const sd of [-1, 1]) {                                          // zwei weisse Mantelhaelften
+    ctx.beginPath(); ctx.moveTo(sd * 12, -10); ctx.lineTo(sd * 3.5, -10); ctx.lineTo(sd * 4.5 + hem * 0.4, 24);
+    ctx.lineTo(sd * 20 + hem, 24); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(sd * 3.5, -10); ctx.lineTo(sd * 4.5 + hem * 0.4, 24); ctx.lineTo(sd * 20 + hem, 24); ctx.stroke();
+    ctx.strokeStyle = '#dfe3f0'; ctx.lineWidth = 0.7;                  // Falten
+    ctx.beginPath(); ctx.moveTo(sd * 9, 2); ctx.lineTo(sd * 12 + hem * 0.6, 23); ctx.stroke();
+    ctx.strokeStyle = GOLD; ctx.lineWidth = 1.6;
+  }
+  ctx.fillStyle = BROWN; ctx.fillRect(-13, 7, 26, 3);                  // Guertel
+  ctx.fillStyle = GOLD; ctx.fillRect(-2.5, 6.4, 5, 4.2);
+
+  // --- Arme ---
+  const arm = (sd, hx, hy) => {
+    ctx.strokeStyle = HAIR_O; ctx.lineWidth = 8.6; ctx.beginPath(); ctx.moveTo(sd * 10, -7); ctx.lineTo(hx, hy - 4); ctx.stroke();
+    ctx.strokeStyle = WHITE; ctx.lineWidth = 7; ctx.beginPath(); ctx.moveTo(sd * 10, -7); ctx.lineTo(hx, hy - 4); ctx.stroke();
+    ctx.strokeStyle = GOLD; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(hx - 3.2, hy - 3.4); ctx.lineTo(hx + 3.2, hy - 3.4); ctx.stroke();
+    ctx.fillStyle = SKIN; ctx.beginPath(); ctx.arc(hx, hy, 2.6, 0, 7); ctx.fill();
+  };
+  arm(-f, -f * 16, 6 + (moving ? -step * 3 : Math.sin(now * 2) * 0.5));
+
+  // --- Hals + Kragen ---
+  ctx.fillStyle = SKIN; ctx.fillRect(-2.6, -12, 5.2, 4);
+  ctx.fillStyle = WHITE; ctx.strokeStyle = GOLD; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(-8, -8); ctx.lineTo(-5.5, -13); ctx.lineTo(0, -9.5); ctx.lineTo(5.5, -13); ctx.lineTo(8, -8); ctx.closePath(); ctx.fill(); ctx.stroke();
+
+  // --- Haar hinten, Gesicht ---
+  const cy = -20;
+  ctx.fillStyle = HAIR; ctx.strokeStyle = HAIR_O; ctx.lineWidth = 0.9;
+  ctx.beginPath(); ctx.ellipse(0, cy - 2, 11.3, 11.6, 0, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = SKIN; ctx.beginPath();
+  ctx.moveTo(-8.4, cy - 3); ctx.bezierCurveTo(-8.6, cy + 5, -4, cy + 9.8, 0, cy + 9.8);
+  ctx.bezierCurveTo(4, cy + 9.8, 8.6, cy + 5, 8.4, cy - 3); ctx.bezierCurveTo(8, cy - 10, -8, cy - 10, -8.4, cy - 3); ctx.fill();
+  ctx.fillStyle = 'rgba(255,140,150,0.28)';
+  for (const sd of [-1, 1]) { ctx.beginPath(); ctx.ellipse(sd * 5.6, cy + 6.8, 2.2, 1.1, 0, 0, 7); ctx.fill(); }
+
+  // --- Elfenohren + Ohrringe ---
+  for (const sd of [-1, 1]) {
+    const wig = moving ? 0 : Math.sin(now * 2.5 + sd) * 0.6;
+    ctx.fillStyle = SKIN; ctx.strokeStyle = SKIN_O; ctx.lineWidth = 0.8;
+    ctx.beginPath(); ctx.moveTo(sd * 7.8, cy - 3);
+    ctx.quadraticCurveTo(sd * 15, cy - 7, sd * 22, cy - 12 + wig);
+    ctx.quadraticCurveTo(sd * 15, cy + 1, sd * 8.3, cy + 3.5); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#efc9b8'; ctx.beginPath(); ctx.moveTo(sd * 10, cy - 2.6); ctx.quadraticCurveTo(sd * 15, cy - 4, sd * 19, cy - 10 + wig); ctx.stroke();
+    const sw = (moving ? Math.sin(ph + sd) * 1.2 : Math.sin(now * 2) * 0.5);
+    ctx.strokeStyle = GOLD; ctx.lineWidth = 0.9;
+    ctx.beginPath(); ctx.moveTo(sd * 9.2, cy + 3); ctx.lineTo(sd * 9.2 + sw * 0.4, cy + 6); ctx.stroke();
+    ctx.fillStyle = '#e04b4b'; ctx.beginPath(); ctx.arc(sd * 9.2 + sw * 0.5, cy + 7.2, 1.5, 0, 7); ctx.fill();
+    ctx.strokeStyle = GOLD; ctx.beginPath(); ctx.moveTo(sd * 9.2 + sw * 0.5, cy + 8.6); ctx.lineTo(sd * 9.2 + sw, cy + 11.5); ctx.stroke();
+  }
+
+  // --- Augen ---
+  for (const sd of [-1, 1]) {
+    const ex = sd * 4.2, ey = cy + 6.4;
+    if (blink) {
+      ctx.strokeStyle = DARK; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.ellipse(ex, ey - 1.2, 3, 1.6, 0, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+    } else {
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.ellipse(ex, ey, 3, 3.2, 0, 0, 7); ctx.fill();
+      const g = ctx.createLinearGradient(0, ey - 3, 0, ey + 3); g.addColorStop(0, '#2f7f5a'); g.addColorStop(1, '#8be0a4');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(ex, ey + 0.2, 2.3, 2.9, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = '#12281d'; ctx.beginPath(); ctx.ellipse(ex, ey, 1, 1.6, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ex - 0.8, ey - 1.3, 0.95, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(ex + 0.9, ey + 1.2, 0.45, 0, 7); ctx.fill();
+      ctx.strokeStyle = DARK; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.ellipse(ex, ey, 3.1, 3.3, 0, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke();
+      ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(ex + sd * 3, ey - 1.6); ctx.lineTo(ex + sd * 4.6, ey - 2.8); ctx.stroke();   // Wimpern
+    }
+  }
+  ctx.strokeStyle = '#c98a8a'; ctx.lineWidth = 0.8; ctx.beginPath();
+  ctx.moveTo(-1.3, cy + 9); ctx.quadraticCurveTo(0, cy + 9.6, 1.3, cy + 9); ctx.stroke();
+
+  // --- Pony + Seitenstraehnen (vorne) ---
+  const sw2 = moving ? Math.sin(ph) * 0.5 : Math.sin(now * 1.6) * 0.3;
+  ctx.fillStyle = HAIR; ctx.strokeStyle = HAIR_O; ctx.lineWidth = 0.9;
+  ctx.beginPath(); ctx.moveTo(-10.8, cy + 2);
+  ctx.bezierCurveTo(-12, cy - 15, 12, cy - 15, 10.8, cy + 2);
+  ctx.lineTo(10 + sw2, cy + 9); ctx.lineTo(8.6, cy + 1);                       // rechte Seitenstraehne
+  ctx.lineTo(6.5, cy + 3.8); ctx.lineTo(4.2, cy - 0.5); ctx.lineTo(1.4, cy + 3); ctx.lineTo(0.4, cy - 3.5);
+  ctx.lineTo(-1.8, cy + 3.2); ctx.lineTo(-4.6, cy - 0.4); ctx.lineTo(-6.6, cy + 3.8); ctx.lineTo(-8.6, cy + 1);
+  ctx.lineTo(-10 + sw2, cy + 9); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = '#cfd6ea'; ctx.lineWidth = 0.6;
+  ctx.beginPath(); ctx.moveTo(-3, cy - 9); ctx.quadraticCurveTo(-5, cy - 4, -4.6, cy - 0.8);
+  ctx.moveTo(4, cy - 9); ctx.quadraticCurveTo(6, cy - 4, 4.4, cy - 0.8); ctx.stroke();
+
+  // --- Stab (vorne) ---
+  ctx.save(); ctx.translate(f * 22, 3);
+  ctx.rotate(moving ? Math.sin(ph + 1) * 0.12 * f : Math.sin(now * 2) * 0.025);
+  ctx.strokeStyle = '#4b3420'; ctx.lineWidth = 3.4; ctx.beginPath(); ctx.moveTo(0, 25); ctx.lineTo(f * 1.5, -37); ctx.stroke();
+  ctx.strokeStyle = GOLD; ctx.lineWidth = 1.4; for (const ry of [-8, 14]) { ctx.beginPath(); ctx.moveTo(-2, ry); ctx.lineTo(2, ry); ctx.stroke(); }
+  const ox = f * 1.8, oy = -43, pulse = 0.65 + 0.35 * Math.sin(now * 3.5);
+  ctx.strokeStyle = GOLD; ctx.lineWidth = 2.4; ctx.beginPath(); ctx.arc(ox, oy, 6.2, 0, 7); ctx.stroke();
+  ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(ox, oy, 9.2, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ox, oy - 6.2); ctx.lineTo(ox, oy - 12); ctx.stroke();
+  const og = ctx.createRadialGradient(ox, oy, 0, ox, oy, 5.5);
+  og.addColorStop(0, 'rgba(235,248,255,' + pulse + ')'); og.addColorStop(0.5, 'rgba(70,160,255,' + pulse + ')'); og.addColorStop(1, 'rgba(40,110,255,0.2)');
+  ctx.fillStyle = og; ctx.beginPath(); ctx.arc(ox, oy, 5.4, 0, 7); ctx.fill();
+  for (let k = 0; k < 3; k++) {                                          // Funken
+    const a = now * 1.8 + k * 2.09, r = 11 + Math.sin(now * 3 + k) * 2;
+    ctx.fillStyle = 'rgba(150,210,255,' + (0.5 + 0.4 * Math.sin(now * 5 + k)) + ')';
+    ctx.beginPath(); ctx.arc(ox + Math.cos(a) * r, oy + Math.sin(a) * r, 1.1, 0, 7); ctx.fill();
+  }
+  ctx.fillStyle = SKIN; ctx.beginPath(); ctx.arc(0, -1, 2.7, 0, 7); ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+// ---------- Menue ----------
+const NT = SKINS.length + 1;                       // letzte Kachel = "Andere"
+const TW = 108, TH = 115, TGAP = 14, TX0 = (W - (NT * TW + (NT - 1) * TGAP)) / 2;
+const rowY = row => row === 0 ? 105 : 265;
+const BTN = {x: W/2 - 100, y: 420, w: 200, h: 50};
+const inRect = (m, x, y, w, h) => m.x >= x && m.x <= x + w && m.y >= y && m.y <= y + h;
+function menuClick(m) {
+  for (let row = 0; row < 2; row++) for (let i = 0; i < NT; i++) {
+    if (!inRect(m, TX0 + i * (TW + TGAP), rowY(row), TW, TH)) continue;
+    if (i < SKINS.length) { if (row === 0) selP = SKINS[i]; else selB = SKINS[i]; }
+    else { specialRow = row; state = 'special'; return; }
+  }
+  if (inRect(m, BTN.x, BTN.y, BTN.w, BTN.h)) reset();
+}
+function button(label) {
+  ctx.fillStyle = '#4a3bb0'; ctx.fillRect(BTN.x, BTN.y, BTN.w, BTN.h);
+  ctx.strokeStyle = '#ffd24a'; ctx.lineWidth = 2; ctx.strokeRect(BTN.x, BTN.y, BTN.w, BTN.h);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 22px system-ui'; ctx.textAlign = 'center';
+  ctx.fillText(label, W/2, BTN.y + 33);
+}
+function renderMenu() {
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = 'bold 40px system-ui';
+  ctx.fillText('Magierduell', W/2, 52);
+  for (let row = 0; row < 2; row++) {
+    const cur = row === 0 ? selP : selB;
+    ctx.font = 'bold 18px system-ui'; ctx.fillStyle = '#cbd'; ctx.textAlign = 'left';
+    ctx.fillText(row === 0 ? 'Dein Magier' : 'Dein Gegner', TX0, rowY(row) - 10);
+    for (let i = 0; i < NT; i++) {
+      const x = TX0 + i * (TW + TGAP), y = rowY(row), other = i === SKINS.length;
+      const sel = other ? !!cur.special : cur === SKINS[i];
+      ctx.fillStyle = sel ? '#2d2566' : '#1e1a40'; ctx.fillRect(x, y, TW, TH);
+      ctx.strokeStyle = sel ? '#ffd24a' : '#3b2f7a'; ctx.lineWidth = sel ? 3 : 1; ctx.strokeRect(x, y, TW, TH);
+      ctx.fillStyle = '#ddd'; ctx.font = '13px system-ui'; ctx.textAlign = 'center';
+      if (other && !cur.special) {
+        ctx.font = 'bold 44px system-ui'; ctx.fillStyle = '#8c7be0'; ctx.fillText('?', x + TW/2, y + 70);
+        ctx.font = '13px system-ui'; ctx.fillStyle = '#ddd'; ctx.fillText('Andere', x + TW/2, y + TH - 8);
+      } else {
+        const sk = other ? cur : SKINS[i];
+        drawWizardAt(x + TW/2, y + 58, sk, row === 1, false, 1.2);
+        ctx.fillText(other ? sk.name + ' (Andere)' : sk.name, x + TW/2, y + TH - 8);
+      }
+    }
+  }
+  button('Spielen');
+  ctx.fillStyle = '#889'; ctx.font = '13px system-ui'; ctx.textAlign = 'center';
+  ctx.fillText('Skin anklicken · Enter oder „Spielen“ startet · im Spiel: M = zurück zum Menü', W/2, 505);
+}
+
+// ---------- Besondere Skins ----------
+const SW = 190, SH = 250, SGAP = 30;
+const spX = i => (W - (SPECIAL.length * SW + (SPECIAL.length - 1) * SGAP)) / 2 + i * (SW + SGAP);
+function specialClick(m) {
+  for (let i = 0; i < SPECIAL.length; i++) if (inRect(m, spX(i), 110, SW, SH)) {
+    if (specialRow === 0) selP = SPECIAL[i]; else selB = SPECIAL[i];
+    state = 'menu'; return;
+  }
+  if (inRect(m, BTN.x, BTN.y, BTN.w, BTN.h)) state = 'menu';
+}
+function renderSpecial() {
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = 'bold 34px system-ui';
+  ctx.fillText('Besondere Skins', W/2, 52);
+  ctx.font = '16px system-ui'; ctx.fillStyle = '#cbd';
+  ctx.fillText(specialRow === 0 ? 'für deinen Magier' : 'für deinen Gegner', W/2, 82);
+  for (let i = 0; i < SPECIAL.length; i++) {
+    const x = spX(i), sk = SPECIAL[i], cur = specialRow === 0 ? selP : selB;
+    ctx.fillStyle = '#2d2566'; ctx.fillRect(x, 110, SW, SH);
+    ctx.strokeStyle = cur === sk ? '#ffd24a' : '#3b2f7a'; ctx.lineWidth = cur === sk ? 3 : 1; ctx.strokeRect(x, 110, SW, SH);
+    const walking = (now % 6) > 3;
+    drawWizardAt(x + SW/2, 110 + 130, sk, specialRow === 1, false, 2.4, walking);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 20px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(sk.name, x + SW/2, 110 + SH - 12);
+  }
+  button('Zurück');
+}
+
+function bar(x, y, w, hp, color, label) {
+  ctx.fillStyle = '#000a'; ctx.fillRect(x, y, w, 18);
+  ctx.fillStyle = color; ctx.fillRect(x, y, w * hp / 100, 18);
+  ctx.strokeStyle = '#fff6'; ctx.strokeRect(x, y, w, 18);
+  ctx.fillStyle = '#fff'; ctx.font = '12px system-ui'; ctx.textAlign = 'left';
+  ctx.fillText(label + ' ' + Math.ceil(hp) + '/100', x + 6, y + 13);
+}
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  if (state === 'menu') { renderMenu(); return; }
+  if (state === 'special') { renderSpecial(); return; }
+  ctx.setLineDash([6, 10]); ctx.strokeStyle = '#ffffff22'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(W/2, 0); ctx.lineTo(W/2, H); ctx.stroke(); ctx.setLineDash([]);
+
+  drawWizard(player); drawWizard(bot);
+
+  for (const p of projectiles) {
+    ctx.save(); ctx.translate(p.x, p.y);
+    strokePath(p.shape, p.color, 9, 0.35);
+    strokePath(p.shape, '#fff', 3);
+    ctx.restore();
+  }
+  for (const q of particles) { ctx.globalAlpha = Math.max(0, q.life); ctx.fillStyle = q.color; ctx.fillRect(q.x, q.y, 3, 3); }
+  ctx.globalAlpha = 1;
+  ctx.font = 'bold 20px system-ui'; ctx.textAlign = 'center';
+  for (const f of floaters) { ctx.globalAlpha = f.life; ctx.fillStyle = '#ffd24a'; ctx.fillText(f.txt, f.x, f.y); }
+  ctx.globalAlpha = 1;
+
+  // Zeichnung des Spielers
+  if (drawing) {
+    strokePath(drawing.sm, dmgOf(drawing.len) >= 20 ? '#ffd24a' : '#9df', 4);
+    ctx.strokeStyle = '#ffffff44'; ctx.lineWidth = 1; ctx.setLineDash([4, 6]);
+    ctx.beginPath(); ctx.moveTo(player.x, player.y); ctx.lineTo(mouse.x, mouse.y); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#fff'; ctx.font = '16px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText('Schaden: ' + (drawing.len >= MIN_INK ? dmgOf(drawing.len) : '–'), mouse.x + 14, mouse.y - 10);
+  }
+  // Bot zeichnet
+  if (bot.ai.drawing) strokePath(smooth(bot.ai.drawing.pts), bot.color, 4, 0.8);
+
+  // HUD
+  bar(20, 16, 300, player.hp, '#3b9dff', 'Du');
+  bar(W - 320, 16, 300, bot.hp, '#ff4d3d', 'Bot');
+  // Manaanzeige (kurz): leert sich beim Zeichnen bis zum Maximalschaden
+  const mana = drawing ? Math.max(0, 1 - drawing.len / 227) : 1 - Math.min(1, player.cd / 1.5);
+  ctx.fillStyle = '#000a'; ctx.fillRect(20, 40, 140, 8);
+  ctx.fillStyle = mana > 0 ? '#9df' : '#ffd24a'; ctx.fillRect(20, 40, 140 * mana, 8);
+  ctx.strokeStyle = '#fff6'; ctx.lineWidth = 1; ctx.strokeRect(20, 40, 140, 8);
+  ctx.fillStyle = '#aab'; ctx.font = '11px system-ui'; ctx.textAlign = 'left';
+  ctx.fillText('Mana', 166, 48);
+
+  if (state === 'over') {
+    ctx.fillStyle = '#000b'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = bot.hp <= 0 ? '#7f7' : '#f77'; ctx.font = 'bold 54px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(msg, W/2, H/2 - 10);
+    ctx.fillStyle = '#fff'; ctx.font = '20px system-ui';
+    ctx.fillText('Klick oder Enter: neue Runde · M: Menü', W/2, H/2 + 35);
+  }
+}
+
+let last = performance.now();
+function loop(t) {
+  let dt = Math.min(0.05, (t - last) / 1000); last = t; now = t / 1000;
+  if (drawing) dt *= 0.25;   // Zeitlupe beim Zeichnen
+  update(dt); render(); requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
+
