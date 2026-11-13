@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Straßenkampf: Der Weg zum Boss</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#111;overflow:hidden;font-family:"Segoe UI",Arial,sans-serif;color:#fff}
+  canvas{display:block;cursor:crosshair}
+  #overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.72);flex-direction:column;text-align:center}
+  #overlay h1{font-size:34px;margin:0 0 6px;letter-spacing:2px;text-transform:uppercase;color:#ffd24a;text-shadow:0 2px 0 #000}
+  #overlay p{margin:0 0 18px;color:#ccc}
+  #cards{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;max-width:920px}
+  .card{width:170px;background:#1c2430;border:2px solid #3a4a60;border-radius:10px;padding:12px;cursor:pointer;transition:.12s;text-align:left}
+  .card:hover{transform:translateY(-4px);border-color:#ffd24a;background:#26324a}
+  .card h3{margin:0 0 2px;font-size:17px}
+  .card small{color:#8fa3bf}
+  .bar{height:6px;background:#0d121a;border-radius:3px;margin:3px 0 7px;overflow:hidden}
+  .bar i{display:block;height:100%;background:#ffd24a}
+  .key{float:right;background:#ffd24a;color:#000;border-radius:4px;padding:0 6px;font-weight:700;font-size:13px}
+  button.big{margin-top:20px;background:#ffd24a;color:#000;border:0;padding:12px 30px;font-size:18px;font-weight:700;border-radius:8px;cursor:pointer}
+  #start{display:flex}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="overlay"></div>
+<script>
+// ============================================================ Setup
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const ov = document.getElementById('overlay');
+let W, H;
+function resize(){ W = cv.width = innerWidth; H = cv.height = innerHeight; }
+addEventListener('resize', resize); resize();
+
+const keys = {}; let mouse = {x:0,y:0,down:false};
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'Space') e.preventDefault(); onKey(e.code); });
+addEventListener('keyup', e => keys[e.code] = false);
+cv.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+cv.addEventListener('mousedown', () => mouse.down = true);
+addEventListener('mouseup', () => mouse.down = false);
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+const rnd = (a,b) => a + Math.random()*(b-a);
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+const dist = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
+
+// ============================================================ Daten
+const WEAPONS = {
+  sling:   {name:'Steinschleuder',  dmg:18, rate:.45, speed:650, spread:.04, pellets:1, color:'#c9a36b', len:14, r:4},
+  pistol:  {name:'Pistole',         dmg:45, rate:.26, speed:950, spread:.03, pellets:1, color:'#bbb',    len:18, r:3},
+  smg:     {name:'Maschinenpistole',dmg:22, rate:.075,speed:1000,spread:.13, pellets:1, color:'#888',    len:24, r:3},
+  shotgun: {name:'Schrotflinte',    dmg:32, rate:.85, speed:900, spread:.38, pellets:7, color:'#8a5a2b', len:30, r:3},
+  rifle:   {name:'Sturmgewehr',     dmg:38, rate:.11, speed:1150,spread:.05, pellets:1, color:'#4a5a3a', len:34, r:3},
+  rocket:  {name:'Raketenwerfer',   dmg:320, rate:1.25,speed:520, spread:0,   pellets:1, color:'#d04a2a', len:36, r:6, splash:110},
+  revolver:{name:'Revolver',        dmg:85,  rate:.5,  speed:1000,spread:.02, pellets:1, color:'#c8c8d0', len:20, r:4},
+  uzi:     {name:'Uzi',             dmg:16,  rate:.05, speed:1000,spread:.2,  pellets:1, color:'#666',    len:20, r:3},
+  sniper:  {name:'Scharfschützengewehr', dmg:280, rate:1.1, speed:2000, spread:0, pellets:1, color:'#35402f', len:44, r:4, col:'#fff'},
+  flame:   {name:'Flammenwerfer',   dmg:12,  rate:.035,speed:430, spread:.22, pellets:1, color:'#b33a1a', len:30, r:7, life:.5, col:'#ff8a2a'},
+  grenade: {name:'Granatwerfer',    dmg:230, rate:.95, speed:430, spread:.02, pellets:1, color:'#4a6a3a', len:30, r:6, splash:135},
+  minigun: {name:'Minigun',         dmg:26,  rate:.045,speed:1100,spread:.14, pellets:1, color:'#555',    len:38, r:3},
+  laser:   {name:'Laserkanone',     dmg:60,  rate:.17, speed:1600,spread:0,   pellets:1, color:'#2ad0e8', len:30, r:4, col:'#5ef0ff'},
+  crossbow:{name:'Armbrust',        dmg:150, rate:.7,  speed:1300,spread:.01, pellets:1, color:'#8a6a3a', len:24, r:4, col:'#d9c9a0'}
+};
+const GEAR = {
+  vest:  {name:'Schutzweste', color:'#3b6ea5', text:'+50 Rüstung'},
+  medkit:{name:'Medkit',      color:'#e04848', text:'+40 Leben'},
+  boots: {name:'Sprintschuhe',color:'#3fbf7f', text:'+15% Tempo'},
+  gloves:{name:'Kampfhandschuhe', color:'#c98a2e', text:'+15% Schaden'},
+  helmet:{name:'Helm',        color:'#7d8a99', text:'+25 Rüstung'}
+};
+const CROSS_X = 3000, STREET_END = 3250;
+
+// ============================================================ Zustand
+let state, player, items, bullets, particles, boss, buildings, cars, tele, msgs, shake, time;
+
+function newGame(){
+  state = 'street'; time = 0; shake = 0;
+  player = {x:80, y:20, ang:0, hp:100, maxhp:100, armor:0, speedMul:1, dmgMul:1, inv:['sling'], weapon:'sling',
+            cd:0, dash:0, dashCd:0, dashDir:{x:1,y:0}, hurt:0, step:0, invuln:0};
+  bullets = []; particles = []; msgs = []; boss = null; tele = null;
+  // Items entlang der Straße
+  items = [];
+  const list = ['pistol','vest','revolver','uzi','medkit','smg','boots','shotgun','crossbow','helmet','rifle','flame','gloves','grenade','medkit','sniper','vest','laser','minigun','boots','rocket','gloves'];
+  list.forEach((k,i) => {
+    const x = 300 + i*(2500/(list.length-1)) + rnd(-12,12);
+    items.push({x, y: (i%2?1:-1)*rnd(25,75), key:k, type: WEAPONS[k] ? 'weapon':'gear', taken:false, ph:Math.random()*6});
+  });
+  // Gebäude
+  buildings = [];
+  const cols = ['#5b6a80','#7a5b5b','#6a7a5b','#8a7a5a','#4f5f73','#74647f'];
+  for (let x=-200; x<CROSS_X-110; x+=150){
+    for (const s of [-1,1]){
+      const h = rnd(180,420);
+      buildings.push({x, y: s<0 ? -190-h : 190, w:134, h, c:cols[(Math.random()*cols.length)|0], s});
+    }
+  }
+  for (let x=CROSS_X+130; x<STREET_END+100; x+=150)
+    for (const s of [-1,1]){ const h=rnd(180,300); buildings.push({x, y:s<0?-190-h:190, w:134, h, c:cols[(Math.random()*cols.length)|0], s}); }
+  for (const sx of [-1,1]) for (const sy of [-1,1]){
+    buildings.push({x: sx<0 ? CROSS_X-110-150 : CROSS_X+130, y: sy<0 ? -620-200 : 620, w:134, h:200, c:'#56637a', s:sy});
+  }
+  // Deko Autos
+  cars = [];
+  for (let i=0;i<14;i++){
+    cars.push({x: 200+i*210+rnd(-40,40), y: (i%2? 1:-1)*(122+rnd(-4,4)), c:['#c0392b','#2980b9','#f1c40f','#ecf0f1','#27ae60','#8e44ad'][i%6]});
+  }
+  ov.style.display='none';
+  say('WASD laufen · Maus zielen · Klick schießen · Leertaste Ausweichrolle', 5);
+  say('Sammle Ausrüstung und Waffen. An der Kreuzung wählst du deine Waffe.', 5);
+}
+
+function say(t, s=3){ msgs.push({t, life:s}); }
+
+// ============================================================ Eingabe-Ereignisse
+function onKey(code){
+  if (state === 'select' || state === 'win' || state === 'lose' || state === 'intro'){
+    if (state === 'select' && /^Digit[1-9]$/.test(code)){
+      const i = +code.slice(5)-1; if (player.inv[i]) chooseWeapon(player.inv[i]);
+    }
+    if ((state==='win'||state==='lose'||state==='intro') && (code==='Enter'||code==='Space')) newGame();
+  }
+}
+
+// ============================================================ Waffenwahl
+function openSelect(){
+  state = 'select';
+  ov.style.display='flex';
+  let h = '<h1>Kreuzung: Waffenwahl</h1><p>Wähle deine Waffe. Danach gibt es kein Zurück: du wirst in die Arena teleportiert.</p><div id="cards">';
+  player.inv.forEach((k,i) => {
+    const w = WEAPONS[k]; const dps = w.dmg*w.pellets/w.rate;
+    h += `<div class="card" onclick="chooseWeapon('${k}')">${i<9?`<span class="key">${i+1}</span>`:""}<h3>${w.name}</h3>
+      <small>Schaden/Sek.</small><div class="bar"><i style="width:${Math.min(100,dps/6)}%"></i></div>
+      <small>Reichweite/Tempo</small><div class="bar"><i style="width:${Math.min(100,w.speed/12)}%"></i></div>
+      <small>Präzision</small><div class="bar"><i style="width:${100-w.spread*180}%"></i></div></div>`;
+  });
+  h += '</div>';
+  ov.innerHTML = h;
+}
+function chooseWeapon(k){
+  if (state !== 'select') return;
+  player.weapon = k; ov.style.display='none';
+  state = 'teleport'; tele = {t:0};
+}
+
+// ============================================================ Arena
+const ARENA_R = 620;
+const pillars = [{x:-300,y:-300,r:42},{x:300,y:-300,r:42},{x:-300,y:300,r:42},{x:300,y:300,r:42}];
+function startArena(){
+  state = 'arena';
+  player.x = 0; player.y = 430; player.invuln = 1.5;
+  bullets = []; particles = [];
+  boss = {x:0, y:-300, r:56, hp:1800, maxhp:1800, t:2, mode:'idle', mt:0, phase:1, vx:0, vy:0, hit:0, ang:0, count:0};
+  say('Der Boss „Der Hausmeister“ erwartet dich!', 3);
+}
+
+// ============================================================ Schießen
+function shoot(){
+  const w = WEAPONS[player.weapon];
+  if (player.cd > 0) return;
+  player.cd = w.rate;
+  const px = player.x + Math.cos(player.ang)*w.len, py = player.y + Math.sin(player.ang)*w.len;
+  for (let i=0;i<w.pellets;i++){
+    const a = player.ang + rnd(-w.spread, w.spread);
+    bullets.push({x:px, y:py, vx:Math.cos(a)*w.speed, vy:Math.sin(a)*w.speed, dmg:w.dmg*player.dmgMul, life:w.life||1.2, r:w.r,
+                  own:'p', rocket: !!w.splash, splash:w.splash||0, col: w.col || (w.splash ? '#ff7a30' : '#ffe27a')});
+  }
+  // Mündungsfeuer
+  for (let i=0;i<4;i++) particles.push({x:px,y:py,vx:Math.cos(player.ang)*120+rnd(-80,80),vy:Math.sin(player.ang)*120+rnd(-80,80),life:.12,c:'#ffd86b',s:3});
+  shake = Math.max(shake, w.splash? 6 : w.pellets>1 ? 4 : 1.2);
+}
+function bossShoot(a, sp=300, dmg=9){
+  bullets.push({x:boss.x+Math.cos(a)*boss.r, y:boss.y+Math.sin(a)*boss.r, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, dmg, life:5, r:7, own:'b', col:'#ff4a8a'});
+}
+function hurtPlayer(d){
+  if (player.invuln > 0) return;
+  if (player.armor > 0){ const a = Math.min(player.armor, d*.6); player.armor -= a; d -= a; }
+  player.hp -= d; player.hurt = .25; shake = Math.max(shake, 7);
+  if (player.hp <= 0){ player.hp = 0; state='lose'; showEnd(false); }
+}
+function explode(x,y,r,dmg){
+  for (let i=0;i<30;i++){ const a=rnd(0,6.28), s=rnd(60,320);
+    particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rnd(.3,.7),c:['#ff7a30','#ffd24a','#555'][i%3],s:rnd(3,7)}); }
+  shake = 12;
+  if (boss && Math.hypot(boss.x-x, boss.y-y) < r + boss.r) damageBoss(dmg);
+}
+function damageBoss(d){
+  boss.hp -= d; boss.hit = .08;
+  if (boss.hp <= 0 && state==='arena'){ state='win'; for(let i=0;i<120;i++){const a=rnd(0,6.28),s=rnd(80,500);particles.push({x:boss.x,y:boss.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:rnd(.5,1.5),c:['#ffd24a','#ff4a8a','#fff'][i%3],s:rnd(3,8)});} setTimeout(()=>showEnd(true),1500); }
+}
+function showEnd(win){
+  ov.style.display='flex';
+  ov.innerHTML = `<h1>${win ? 'Boss besiegt!' : 'Du bist gefallen'}</h1>
+    <p>${win ? 'Die Straße gehört dir. Respekt!' : 'Der Hausmeister war zu stark. Nächster Versuch?'}</p>
+    <button class="big" onclick="newGame()">Nochmal spielen (Enter)</button>`;
+}
+
+// ============================================================ Update
+function update(dt){
+  time += dt;
+  msgs.forEach(m => m.life -= dt); msgs = msgs.filter(m => m.life > 0);
+  particles.forEach(p => { p.x+=p.vx*dt; p.y+=p.vy*dt; p.life-=dt; }); particles = particles.filter(p=>p.life>0);
+  shake *= Math.pow(.001, dt);
+
+  if (state === 'teleport'){
+    tele.t += dt;
+    if (Math.random()<.9) particles.push({x:player.x+rnd(-20,20),y:player.y+rnd(-10,20),vx:rnd(-30,30),vy:rnd(-400,-150),life:.7,c:'#5ef0ff',s:3});
+    if (tele.t > 2.2) startArena();
+    return;
+  }
+  if (state !== 'street' && state !== 'arena' && !(state==='win')) return;
+
+  // --- Spieler
+  const p = player;
+  p.cd -= dt; p.dashCd -= dt; p.hurt -= dt; p.invuln -= dt;
+  const cx = W/2 + 0, cy = H/2;
+  const cam = camera();
+  p.ang = Math.atan2(mouse.y - (p.y - cam.y + H/2), mouse.x - (p.x - cam.x + W/2));
+  let mx = (keys.KeyD||keys.ArrowRight?1:0) - (keys.KeyA||keys.ArrowLeft?1:0);
+  let my = (keys.KeyS||keys.ArrowDown?1:0) - (keys.KeyW||keys.ArrowUp?1:0);
+  const ml = Math.hypot(mx,my);
+  if (state !== 'win'){
+    if (p.dash > 0){
+      p.dash -= dt; p.x += p.dashDir.x*720*dt; p.y += p.dashDir.y*720*dt;
+    } else {
+      if (ml){ mx/=ml; my/=ml; p.step += dt*10; }
+      const sp = 235*p.speedMul;
+      p.x += mx*sp*dt; p.y += my*sp*dt;
+      if (keys.Space && p.dashCd <= 0){
+        p.dash = .16; p.dashCd = 1; p.invuln = Math.max(p.invuln,.25);
+        p.dashDir = ml ? {x:mx,y:my} : {x:Math.cos(p.ang),y:Math.sin(p.ang)};
+      }
+    }
+    if (mouse.down) shoot();
+  }
+
+  if (state === 'street') updateStreet(dt); else updateArena(dt);
+
+  // --- Kugeln
+  for (const b of bullets){
+    b.x += b.vx*dt; b.y += b.vy*dt; b.life -= dt;
+    if (b.rocket) particles.push({x:b.x,y:b.y,vx:rnd(-20,20),vy:rnd(-20,20),life:.3,c:'#aaa',s:3});
+    if (state === 'arena'){
+      if (Math.hypot(b.x,b.y) > ARENA_R) b.life = 0;
+      for (const pl of pillars) if (Math.hypot(b.x-pl.x,b.y-pl.y) < pl.r){ b.life = 0; }
+      if (b.own==='p' && boss && boss.hp>0 && Math.hypot(b.x-boss.x,b.y-boss.y) < boss.r + b.r){
+        b.life = 0;
+        if (b.rocket) explode(b.x,b.y,b.splash,b.dmg); else { damageBoss(b.dmg); particles.push({x:b.x,y:b.y,vx:rnd(-90,90),vy:rnd(-90,90),life:.25,c:'#ff4a8a',s:3}); }
+      }
+      if (b.own==='b' && Math.hypot(b.x-p.x,b.y-p.y) < 14 + b.r && p.invuln<=0){ b.life = 0; hurtPlayer(b.dmg); }
+    } else if (b.rocket && b.life <= 0) {}
+  }
+  bullets = bullets.filter(b => b.life > 0 || (b.rocket && b.own==='p' && state==='arena' && (explode(b.x,b.y,b.splash,b.dmg*0), false)));
+}
+
+function updateStreet(dt){
+  const p = player;
+  p.x = clamp(p.x, 10, STREET_END);
+  const inCross = Math.abs(p.x - CROSS_X) < 100;
+  p.y = inCross ? clamp(p.y, -590, 590) : clamp(p.y, -165, 165);
+  if (inCross) p.x = clamp(p.x, CROSS_X-100, STREET_END);
+  // Pickups
+  for (const it of items){
+    if (it.taken || Math.hypot(it.x-p.x, it.y-p.y) > 30) continue;
+    it.taken = true;
+    if (it.type === 'weapon'){ p.inv.push(it.key); say('Aufgenommen: '+WEAPONS[it.key].name, 2.5); }
+    else {
+      say(GEAR[it.key].name+' ('+GEAR[it.key].text+')', 2.5);
+      if (it.key==='vest') p.armor = Math.min(100,p.armor+50);
+      if (it.key==='helmet') p.armor = Math.min(100,p.armor+25);
+      if (it.key==='medkit') p.hp = Math.min(p.maxhp,p.hp+40);
+      if (it.key==='boots') p.speedMul *= 1.15;
+      if (it.key==='gloves') p.dmgMul *= 1.15;
+    }
+    for (let i=0;i<14;i++) particles.push({x:it.x,y:it.y,vx:rnd(-120,120),vy:rnd(-120,120),life:.5,c:'#fff',s:3});
+  }
+  // Kreuzung betreten
+  if (Math.hypot(p.x-CROSS_X, p.y) < 80) openSelect();
+}
+
+function updateArena(dt){
+  const p = player;
+  const d = Math.hypot(p.x,p.y);
+  if (d > ARENA_R-18){ p.x *= (ARENA_R-18)/d; p.y *= (ARENA_R-18)/d; }
+  for (const pl of pillars){
+    const dx=p.x-pl.x, dy=p.y-pl.y, dd=Math.hypot(dx,dy), m=pl.r+14;
+    if (dd < m){ p.x = pl.x+dx/dd*m; p.y = pl.y+dy/dd*m; }
+  }
+  if (!boss || boss.hp <= 0) return;
+  const b = boss;
+  b.hit -= dt; b.t -= dt; b.mt += dt;
+  if (b.hp < b.maxhp/2 && b.phase===1){ b.phase = 2; say('Der Boss rastet aus!', 2.5); shake=14; }
+  const f = b.phase===2 ? 1.5 : 1;
+  const toP = Math.atan2(p.y-b.y, p.x-b.x);
+  b.ang = toP;
+
+  if (b.mode === 'idle'){
+    // langsam verfolgen
+    const sp = 55*f; b.x += Math.cos(toP)*sp*dt; b.y += Math.sin(toP)*sp*dt;
+    if (b.t <= 0){
+      const r = Math.random();
+      b.mt = 0; b.count = 0;
+      b.mode = r<.34 ? 'ring' : r<.68 ? 'burst' : 'charge';
+      if (b.mode==='charge'){ b.t = .9/f; } else b.t = 0;
+    }
+  } else if (b.mode === 'ring'){
+    if (b.t <= 0){
+      const n = b.phase===2 ? 22 : 16, off = b.count*.2;
+      for (let i=0;i<n;i++) bossShoot(i/n*6.283+off, 230+b.count*10);
+      b.count++; b.t = .55/f;
+      if (b.count >= 3){ b.mode='idle'; b.t = 1.4/f; }
+    }
+  } else if (b.mode === 'burst'){
+    if (b.t <= 0){
+      const spreadN = b.phase===2 ? 2 : 1;
+      for (let k=-spreadN;k<=spreadN;k++) bossShoot(toP + k*.16, 380, 8);
+      b.count++; b.t = .16/f;
+      if (b.count >= 12){ b.mode='idle'; b.t = 1.2/f; }
+    }
+  } else if (b.mode === 'charge'){
+    if (b.t > 0){ b.vx = Math.cos(toP); b.vy = Math.sin(toP); } // zielen (Telegraph)
+    else {
+      b.x += b.vx*620*f*dt; b.y += b.vy*620*f*dt;
+      if (b.t < -0.7/f || Math.hypot(b.x,b.y) > ARENA_R-b.r){ b.mode='idle'; b.t = 1.1/f; shake = 10; }
+      if (Math.hypot(b.x-p.x,b.y-p.y) < b.r+14) hurtPlayer(25);
+    }
+  }
+  // Boss in Arena halten
+  const bd = Math.hypot(b.x,b.y); if (bd > ARENA_R-b.r){ b.x*= (ARENA_R-b.r)/bd; b.y*=(ARENA_R-b.r)/bd; }
+  for (const pl of pillars){
+    const dx=b.x-pl.x, dy=b.y-pl.y, dd=Math.hypot(dx,dy), m=pl.r+b.r;
+    if (dd<m){ b.x=pl.x+dx/dd*m; b.y=pl.y+dy/dd*m; }
+  }
+  if (Math.hypot(b.x-p.x,b.y-p.y) < b.r+10 && b.mode!=='charge') hurtPlayer(10*dt*4);
+}
+
+function camera(){ return {x: player.x, y: player.y}; }
+
+// ============================================================ Zeichnen: Personen
+function drawPerson(x,y,ang,o){
+  // Draufsicht im Stil von GTA 1/2: Schultern, Kopf, Arme zur Waffe
+  ctx.save(); ctx.translate(x,y); ctx.rotate(ang);
+  const s = o.scale||1; ctx.scale(s,s);
+  const sw = Math.sin(o.step||0)*4;
+  // Schatten
+  ctx.fillStyle='rgba(0,0,0,.3)'; ctx.beginPath(); ctx.ellipse(2,3,14,18,0,0,7); ctx.fill();
+  // Beine/Füße
+  ctx.fillStyle='#1d2a44';
+  ctx.fillRect(-4+sw,-10,10,6); ctx.fillRect(-4-sw,4,10,6);
+  // Waffe
+  if (o.weapon){
+    const w = WEAPONS[o.weapon];
+    ctx.fillStyle = w.color; ctx.fillRect(6, 2, w.len, o.weapon==='rocket'?7:4);
+    if (o.weapon==='rocket'){ ctx.fillStyle='#222'; ctx.fillRect(w.len+4,1,4,9); }
+    if (o.weapon==='shotgun'||o.weapon==='rifle'){ ctx.fillStyle='#222'; ctx.fillRect(8,3,w.len-8,1.5); }
+  }
+  // Arme
+  ctx.fillStyle = o.jacket; ctx.strokeStyle='#000'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.ellipse(8,-7,6,3.5,.3,0,7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(10,4,6,3.5,-.2,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = o.skin; ctx.beginPath(); ctx.arc(14,-7,2.6,0,7); ctx.fill(); ctx.beginPath(); ctx.arc(16,4,2.6,0,7); ctx.fill();
+  // Oberkörper/Schultern
+  ctx.fillStyle = o.jacket; ctx.beginPath(); ctx.ellipse(0,0,7.5,15,0,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = o.stripe; ctx.fillRect(-2,-13,4,26);
+  // Kopf
+  ctx.fillStyle = o.skin; ctx.beginPath(); ctx.arc(1,0,7,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = o.hair; ctx.beginPath(); ctx.arc(-1.5,0,6.3,Math.PI*.45,Math.PI*1.55); ctx.fill();
+  if (o.helmet){ ctx.fillStyle='#7d8a99'; ctx.beginPath(); ctx.arc(0,0,7.5,Math.PI*.5,Math.PI*1.5); ctx.fill(); }
+  // Sonnenbrille
+  ctx.fillStyle='#000'; ctx.fillRect(4,-4,2.5,8);
+  ctx.restore();
+}
+const PLAYER_LOOK = {jacket:'#e8a21a', stripe:'#fff', skin:'#e0ac82', hair:'#2a1a10'};
+
+// ============================================================ Zeichnen: Straße
+function drawCar(c){
+  ctx.fillStyle='rgba(0,0,0,.3)'; ctx.fillRect(c.x-30,c.y-14,64,32);
+  ctx.fillStyle=c.c; ctx.beginPath(); ctx.roundRect(c.x-32,c.y-16,64,32,6); ctx.fill();
+  ctx.fillStyle='rgba(20,30,40,.85)'; ctx.fillRect(c.x-12,c.y-12,24,24);
+  ctx.fillStyle='rgba(255,255,255,.25)'; ctx.fillRect(c.x-10,c.y-10,8,20);
+  ctx.fillStyle='#ffe9a0'; ctx.fillRect(c.x+29,c.y-12,3,6); ctx.fillRect(c.x+29,c.y+6,3,6);
+  ctx.fillStyle='#c22'; ctx.fillRect(c.x-32,c.y-12,2,6); ctx.fillRect(c.x-32,c.y+6,2,6);
+}
+function drawItem(it){
+  if (it.taken) return;
+  const bob = Math.sin(time*3+it.ph)*3;
+  const col = it.type==='weapon' ? '#ffd24a' : GEAR[it.key].color;
+  const g = ctx.createRadialGradient(it.x,it.y,2,it.x,it.y,34);
+  g.addColorStop(0,col+'aa'); g.addColorStop(1,col+'00');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(it.x,it.y,34,0,7); ctx.fill();
+  ctx.save(); ctx.translate(it.x,it.y+bob);
+  if (it.type==='weapon'){
+    const w = WEAPONS[it.key]; ctx.rotate(-.3);
+    ctx.fillStyle='#000'; ctx.fillRect(-w.len/2-1,-4,w.len+2,8);
+    ctx.fillStyle=w.color; ctx.fillRect(-w.len/2,-3,w.len,6);
+    ctx.fillStyle='#222'; ctx.fillRect(-w.len/2,2,8,7);
+  } else {
+    ctx.fillStyle='#000'; ctx.beginPath(); ctx.roundRect(-11,-11,22,22,5); ctx.fill();
+    ctx.fillStyle=col; ctx.beginPath(); ctx.roundRect(-9,-9,18,18,4); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='bold 13px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText({vest:'V',medkit:'+',boots:'S',gloves:'H',helmet:'⛑'}[it.key],0,1);
+  }
+  ctx.restore();
+  ctx.fillStyle='#fff'; ctx.font='11px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+  ctx.fillText(it.type==='weapon'?WEAPONS[it.key].name:GEAR[it.key].name, it.x, it.y-22+bob);
+}
+function drawStreet(){
+  // Hintergrund (Gehweg-Grau)
+  ctx.fillStyle='#3d4048'; ctx.fillRect(-400,-1000,4200,2000);
+  // Gehwege
+  ctx.fillStyle='#8d9096'; ctx.fillRect(-300,-190,STREET_END+300+0,380);
+  ctx.fillRect(CROSS_X-120,-610,240,1220);
+  // Fahrbahn
+  ctx.fillStyle='#2b2d31'; ctx.fillRect(-300,-100,STREET_END+300,200);
+  ctx.fillRect(CROSS_X-100,-600,200,1200);
+  // Mittellinie
+  ctx.fillStyle='#e8c53a';
+  for (let x=-300;x<CROSS_X-120;x+=60) ctx.fillRect(x,-2,34,4);
+  for (let x=CROSS_X+120;x<STREET_END;x+=60) ctx.fillRect(x,-2,34,4);
+  for (let y=-600;y<-120;y+=60) ctx.fillRect(CROSS_X-2,y,4,34);
+  for (let y=130;y<600;y+=60) ctx.fillRect(CROSS_X-2,y,4,34);
+  // Zebrastreifen
+  ctx.fillStyle='#ddd';
+  for (let i=-90;i<90;i+=22){ ctx.fillRect(CROSS_X-150,i,30,12); ctx.fillRect(CROSS_X+120,i,30,12);}
+  // Kreuzung markieren
+  ctx.strokeStyle='#ffd24a'; ctx.lineWidth=3; ctx.setLineDash([12,10]);
+  ctx.beginPath(); ctx.arc(CROSS_X,0,80,0,7); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle='rgba(255,210,74,.12)'; ctx.beginPath(); ctx.arc(CROSS_X,0,80,0,7); ctx.fill();
+  ctx.fillStyle='#ffd24a'; ctx.font='bold 14px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('WAFFENWAHL',CROSS_X,5);
+  // Straßenlaternen
+  for (let x=100;x<CROSS_X-150;x+=400){ for (const y of [-180,180]){
+    ctx.fillStyle='rgba(255,230,150,.12)'; ctx.beginPath(); ctx.arc(x,y*.8,90,0,7); ctx.fill();
+    ctx.fillStyle='#222'; ctx.beginPath(); ctx.arc(x,y,5,0,7); ctx.fill(); ctx.fillStyle='#ffe9a0'; ctx.beginPath(); ctx.arc(x,y,3,0,7); ctx.fill(); } }
+  // Autos (Deko am Rand)
+  cars.forEach(drawCar);
+  // Gebäude (Dächer)
+  for (const b of buildings){
+    ctx.fillStyle='rgba(0,0,0,.35)'; ctx.fillRect(b.x+6,b.y+6,b.w,b.h);
+    ctx.fillStyle=b.c; ctx.fillRect(b.x,b.y,b.w,b.h);
+    ctx.fillStyle='rgba(255,255,255,.08)'; ctx.fillRect(b.x+8,b.y+8,b.w-16,b.h-16);
+    ctx.fillStyle='rgba(0,0,0,.25)'; ctx.fillRect(b.x+b.w/2-14,b.y+b.h/2-10,28,20);
+  }
+  // Absperrung am Ende der Querstraße
+  ctx.fillStyle='#d9342b'; for (const y of [-600,596]) for (let i=0;i<8;i++) ctx.fillRect(CROSS_X-96+i*25, y, 14, 4);
+  // Items
+  items.forEach(drawItem);
+}
+
+// ============================================================ Zeichnen: Arena
+function drawArena(){
+  ctx.fillStyle='#07070d'; ctx.fillRect(-1200,-1200,2400,2400);
+  const g = ctx.createRadialGradient(0,0,100,0,0,ARENA_R);
+  g.addColorStop(0,'#2a2438'); g.addColorStop(1,'#15111f');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,ARENA_R,0,7); ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,.05)'; ctx.lineWidth=1;
+  for (let i=-600;i<=600;i+=60){ ctx.beginPath(); ctx.moveTo(i,-600); ctx.lineTo(i,600); ctx.moveTo(-600,i); ctx.lineTo(600,i); ctx.stroke(); }
+  const pulse = .5+.5*Math.sin(time*3);
+  ctx.strokeStyle = `rgba(255,74,138,${.6+.4*pulse})`; ctx.lineWidth=8;
+  ctx.beginPath(); ctx.arc(0,0,ARENA_R,0,7); ctx.stroke();
+  ctx.strokeStyle='rgba(255,74,138,.3)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(0,0,200,0,7); ctx.stroke();
+  for (const p of pillars){
+    ctx.fillStyle='rgba(0,0,0,.4)'; ctx.beginPath(); ctx.arc(p.x+5,p.y+6,p.r,0,7); ctx.fill();
+    ctx.fillStyle='#4a4660'; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill();
+    ctx.fillStyle='#6a6585'; ctx.beginPath(); ctx.arc(p.x-4,p.y-4,p.r-10,0,7); ctx.fill();
+  }
+}
+function drawBoss(){
+  const b = boss; if (!b || b.hp<=0) return;
+  ctx.save(); ctx.translate(b.x,b.y);
+  // Telegraph
+  if (b.mode==='charge' && b.t>0){
+    ctx.strokeStyle='rgba(255,60,60,.6)'; ctx.lineWidth=b.r*1.6; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(b.vx*520,b.vy*520); ctx.stroke();
+  }
+  ctx.fillStyle='rgba(0,0,0,.4)'; ctx.beginPath(); ctx.ellipse(6,8,b.r+4,b.r,0,0,7); ctx.fill();
+  const col = b.hit>0 ? '#fff' : (b.phase===2 ? '#a21f2f' : '#3f5a3a');
+  ctx.rotate(b.ang);
+  // Schultern / Overall
+  ctx.fillStyle=col; ctx.strokeStyle='#000'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.ellipse(0,0,30,52,0,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#d9a441'; ctx.fillRect(-4,-48,8,96);
+  // Arme + Schlüsselbund-Keule
+  ctx.fillStyle=col; ctx.beginPath(); ctx.ellipse(32,-34,18,10,.3,0,7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(34,34,18,10,-.3,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#caa67e'; ctx.beginPath(); ctx.arc(52,-34,8,0,7); ctx.fill(); ctx.beginPath(); ctx.arc(54,34,8,0,7); ctx.fill();
+  ctx.fillStyle='#555'; ctx.fillRect(40,-8,44,16); ctx.fillStyle='#999'; ctx.fillRect(84,-12,10,24);
+  // Kopf
+  ctx.fillStyle = b.hit>0?'#fff':'#caa67e'; ctx.beginPath(); ctx.arc(4,0,22,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#222'; ctx.beginPath(); ctx.arc(-2,0,21,Math.PI*.4,Math.PI*1.6); ctx.fill();
+  ctx.fillStyle = b.phase===2 ? '#ff3030' : '#ffdd44'; ctx.fillRect(14,-12,5,8); ctx.fillRect(14,4,5,8);
+  ctx.restore();
+}
+
+// ============================================================ Render
+function render(){
+  const cam = camera();
+  const sx = (Math.random()-.5)*shake, sy = (Math.random()-.5)*shake;
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+  ctx.save();
+  ctx.translate(Math.round(W/2 - cam.x + sx), Math.round(H/2 - cam.y + sy));
+  const inArena = (state==='arena'||state==='win'||state==='lose') && boss;
+  if (inArena){ drawArena(); drawBoss(); } else drawStreet();
+
+  // Spieler
+  const p = player;
+  ctx.globalAlpha = p.invuln>0 && Math.floor(time*20)%2 ? .45 : 1;
+  const look = p.hurt>0 ? {...PLAYER_LOOK, jacket:'#ff5555'} : PLAYER_LOOK;
+  if (state==='teleport'){
+    // Teleport-Effekt
+    const t = tele.t, a = Math.max(0, 1 - t/2.2);
+    ctx.save();
+    ctx.fillStyle = `rgba(94,240,255,${.25})`; ctx.fillRect(p.x-30, p.y-900, 60, 900);
+    for (let i=0;i<4;i++){ ctx.strokeStyle=`rgba(94,240,255,${.8-i*.15})`; ctx.lineWidth=3; ctx.beginPath(); ctx.ellipse(p.x,p.y,20+((t*80+i*25)%70),(20+((t*80+i*25)%70))*.5,0,0,7); ctx.stroke(); }
+    ctx.restore();
+    ctx.globalAlpha = a; drawPerson(p.x,p.y-t*60,p.ang+t*10,{...look,weapon:p.weapon,scale:1+t*.2});
+    ctx.globalAlpha = 1;
+  } else {
+    drawPerson(p.x,p.y,p.ang,{...look,weapon:p.weapon,step:p.step,helmet:p.armor>0&&false});
+  }
+  ctx.globalAlpha = 1;
+
+  // Kugeln & Partikel
+  for (const b of bullets){
+    ctx.fillStyle=b.col; ctx.shadowColor=b.col; ctx.shadowBlur=10;
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,7); ctx.fill();
+  }
+  ctx.shadowBlur=0;
+  for (const q of particles){ ctx.globalAlpha=Math.min(1,q.life*3); ctx.fillStyle=q.c; ctx.fillRect(q.x,q.y,q.s,q.s); }
+  ctx.globalAlpha=1;
+  ctx.restore();
+
+  // Teleport-Blitz
+  if (state==='teleport' && tele.t>1.6){
+    ctx.fillStyle=`rgba(255,255,255,${Math.min(1,(tele.t-1.6)/.6)})`; ctx.fillRect(0,0,W,H);
+  }
+  drawHUD();
+  // Fadenkreuz
+  if (state==='street'||state==='arena'){
+    ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(mouse.x,mouse.y,9,0,7);
+    ctx.moveTo(mouse.x-14,mouse.y); ctx.lineTo(mouse.x-4,mouse.y); ctx.moveTo(mouse.x+4,mouse.y); ctx.lineTo(mouse.x+14,mouse.y);
+    ctx.moveTo(mouse.x,mouse.y-14); ctx.lineTo(mouse.x,mouse.y-4); ctx.moveTo(mouse.x,mouse.y+4); ctx.lineTo(mouse.x,mouse.y+14); ctx.stroke();
+  }
+}
+
+function bar(x,y,w,h,v,col,label){
+  ctx.fillStyle='rgba(0,0,0,.6)'; ctx.fillRect(x-2,y-2,w+4,h+4);
+  ctx.fillStyle=col; ctx.fillRect(x,y,w*clamp(v,0,1),h);
+  ctx.fillStyle='#fff'; ctx.font='bold 11px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.fillText(label,x+6,y+h/2+1);
+}
+function drawHUD(){
+  const p = player;
+  bar(20,20,220,18,p.hp/p.maxhp,'#d33b3b','LEBEN '+Math.ceil(p.hp));
+  bar(20,46,220,12,p.armor/100,'#3b8bd3','RÜSTUNG '+Math.ceil(p.armor));
+  bar(20,68,220,6,1-clamp(p.dashCd,0,1),'#7be07b','');
+  ctx.fillStyle='#fff'; ctx.font='bold 15px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  ctx.fillText(WEAPONS[p.weapon].name, 20, 100);
+  if (state==='street'){
+    ctx.font='13px sans-serif'; ctx.fillStyle='#ddd';
+    ctx.fillText('Waffen im Rucksack: '+p.inv.length+' von '+Object.keys(WEAPONS).length, 20, 122);
+    const prog = clamp(p.x/CROSS_X,0,1);
+    ctx.fillStyle='rgba(0,0,0,.6)'; ctx.fillRect(W/2-150,18,300,10);
+    ctx.fillStyle='#ffd24a'; ctx.fillRect(W/2-150,18,300*prog,10);
+    ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.fillText('Weg zur Kreuzung',W/2,44);
+  }
+  if ((state==='arena'||state==='win') && boss){
+    const bw = Math.min(600,W-80);
+    ctx.fillStyle='rgba(0,0,0,.65)'; ctx.fillRect(W/2-bw/2-3,18,bw+6,22);
+    ctx.fillStyle = boss.phase===2 ? '#e2335a' : '#c83a6a'; ctx.fillRect(W/2-bw/2,21,bw*clamp(boss.hp/boss.maxhp,0,1),16);
+    ctx.fillStyle='#fff'; ctx.font='bold 13px sans-serif'; ctx.textAlign='center'; ctx.fillText('DER HAUSMEISTER', W/2, 56);
+  }
+  // Nachrichten
+  ctx.textAlign='center'; ctx.font='bold 17px sans-serif';
+  msgs.slice(-3).forEach((m,i)=>{ ctx.globalAlpha=clamp(m.life,0,1); ctx.fillStyle='rgba(0,0,0,.55)';
+    const tw = ctx.measureText(m.t).width; ctx.fillRect(W/2-tw/2-10,H-110+i*30-18,tw+20,26);
+    ctx.fillStyle='#fff'; ctx.fillText(m.t,W/2,H-110+i*30); });
+  ctx.globalAlpha=1;
+}
+
+// ============================================================ Loop
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(.05,(now-last)/1000); last = now;
+  update(dt); render(); requestAnimationFrame(loop);
+}
+newGame();
+state = 'intro';
+ov.style.display='flex';
+ov.innerHTML = `<h1>Straßenkampf</h1>
+  <p>Lauf die Straße entlang, sammle Waffen und Ausrüstung, wähle an der Kreuzung deine Waffe<br>und stelle dich in der Arena dem Boss.</p>
+  <p style="color:#9ab">WASD bewegen · Maus zielen · Linksklick schießen · Leertaste Ausweichrolle</p>
+  <button class="big" onclick="ov.style.display='none';state='street'">Spiel starten</button>`;
+// Intro: Spiel pausiert bis Start (update ignoriert 'intro')
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
