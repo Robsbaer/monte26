@@ -80,24 +80,6 @@
             margin: 40px 0 16px;
         }
 
-        /* Team-Navigation */
-        .team-nav {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-
-        .team-nav a {
-            padding: 10px 22px;
-            border-radius: 999px;
-            color: white;
-            font-weight: bold;
-            text-decoration: none;
-            transition: transform 0.2s;
-        }
-
-        .team-nav a:hover { transform: scale(1.06); }
-
         /* Spiele-Kacheln */
         .grid {
             display: grid;
@@ -197,7 +179,6 @@
         <div class="grid" id="beispiele"></div>
 
         <h2>👥 Eure Team-Spiele</h2>
-        <div class="team-nav" id="team-nav"></div>
         <div id="teams"></div>
         <p class="info">⭐ = Lieblingsspiel, das in der Game-Show vorgestellt wurde · ⌨️ Die meisten Spiele brauchen eine Tastatur.</p>
     </main>
@@ -227,7 +208,33 @@
         //         { name: "Snake", icon: "🐍", datei: "snake.html" }
         //     ]
         // }
+        // "ordner" ist optional – ohne Ordner liegt das Spiel direkt neben der index.html
         const teams = [
+            {
+                name: "The Crows", icon: "🐦‍⬛",
+                spiele: [
+                    { name: "Magier-Moor", icon: "🧙", datei: "magier-moor.html" }
+                ]
+            },
+            {
+                name: "Cabybara", icon: "🦫",
+                spiele: [
+                    { name: "Jump & Run", icon: "🏃", datei: "jump-and-run.html" }
+                ]
+            },
+            {
+                name: "Die schwarzen Augen", icon: "👁️",
+                spiele: [
+                    { name: "Magierduell", icon: "🪄", datei: "magierduell.html" }
+                ]
+            },
+            {
+                name: "Monster Killing Run", icon: "👹",
+                spiele: [
+                    { name: "Straßenkampf", icon: "👊", datei: "strassenkampf.html" },
+                    { name: "Straßenkampf 3D", icon: "🥊", datei: "strassenkampf3d.html" }
+                ]
+            }
         ];
 
         // ========================================================
@@ -254,7 +261,6 @@
             beispielBereich.appendChild(kachel(spiel, spiel.datei, farben[i % farben.length]));
         });
 
-        const nav = document.getElementById("team-nav");
         const teamBereich = document.getElementById("teams");
 
         if (teams.length === 0) {
@@ -263,23 +269,15 @@
 
         teams.forEach((team, t) => {
             const farbe = farben[t % farben.length];
-            const id = "team-" + team.ordner;
-
-            const link = document.createElement("a");
-            link.href = "#" + id;
-            link.style.background = farbe;
-            link.textContent = team.icon + " " + team.name;
-            nav.appendChild(link);
-
             const section = document.createElement("section");
             section.className = "team";
-            section.id = id;
             section.innerHTML = '<h3 style="color:' + farbe + '">' + team.icon + " " + team.name + "</h3>";
 
             const grid = document.createElement("div");
             grid.className = "grid";
             team.spiele.forEach(spiel => {
-                grid.appendChild(kachel(spiel, team.ordner + "/" + spiel.datei, farbe));
+                const pfad = team.ordner ? team.ordner + "/" + spiel.datei : spiel.datei;
+                grid.appendChild(kachel(spiel, pfad, farbe));
             });
             section.appendChild(grid);
             teamBereich.appendChild(section);
