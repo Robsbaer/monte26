@@ -4,22 +4,20 @@
     <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
     <script>
       // Y-Position der Kugel
-      let y = -10;
-      let x = 100;
-      
+      let y = 50;
       // Vertikale Geschwindigkeit der Kugel
       let vy = 0;
-      // Anziehungskr aft
-      let g = 1;
+      // Anziehungskraft
+      let g = 0.6;
       // Radius der Kugel
-      let radius = 100;
+      let radius = 25;
       // Rückprallfaktor
       let restitution = 0.8;
 
       // Erstelle die Oberfläche
-      function setup(red) {
+      function setup() {
         // Erstelle eine Oberfläche mit 600x400 Pixeln
-        createCanvas(725, 700);
+        createCanvas(600, 400);
       }
 
       // Zeichne die Kugel
@@ -36,22 +34,19 @@
         }
 
         // Zeichne die Kugel
-        fill("red");  // Weiß
-        circle(x, y, radius*2);
+        fill("white");  // Weiß
+        circle(width/2, y, radius*2);
 
         // kleine Anleitung
-        fill("red");  // Text in Schwarz
-        text(" du bist Dum ", 300, 200);
+        fill("black");  // Text in Schwarz
+        text("Leertaste = Sprung | Pfeil hoch = hoher Sprung", 10, 20);
       }
 
       // Taste gedrückt-Funktion
       function keyPressed() {
         if (keyCode === 32) vy = -10;        // Leertaste = Sprung
         if (keyCode === UP_ARROW) vy = -14;  // Pfeil hoch = hoher Sprung
-        if (keyCode === RIGHT_ARROW) x = x+10
-         if (keyCode === LEFT_ARROW) x = x+-10
       }
-    
     </script>
   </body>
 </html>
