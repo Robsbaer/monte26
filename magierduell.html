@@ -11,7 +11,7 @@
 </head>
 <body>
 <canvas id="c" width="960" height="540"></canvas>
-<p>Pfeiltasten: bewegen · Maustaste halten und zeichnen · Loslassen: Zauber wird gewirkt (Richtung = Mauszeiger). Je länger die Zeichnung, desto mehr Schaden (aber langsamer & längere Abklingzeit).</p>
+<p>Pfeiltasten: bewegen · Maustaste halten und zeichnen · Loslassen: Zauber wird gewirkt (Richtung = Mauszeiger). Je länger die Zeichnung, desto mehr Schaden (max. 20). Zeichne einen Stern oder ein Dreieck in einem Zug: unabwehrbarer Lichtstrahl mit 30 Schaden! Herz: heilt 10 Leben. Kreis: friert den Gegner ein! Fünfeck: 3 Flammen (je 25 Schaden, abwehrbar)! M beim Zeichnen gedrückt halten: Zauber bleibt stehen und verschwindet, wenn er getroffen wird.</p>
 <script>
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 const W = cv.width, H = cv.height;
@@ -47,7 +47,7 @@ function smooth(pts) {
 
 const keys = {};
 let state = 'menu', msg = '';
-let projectiles = [], particles = [];
+let projectiles = [], particles = [], beams = [], pending = [];
 
 const SKINS = [
   {name: 'Himmelblau', c: '#5aa9ff', h: '#2a6fd0', g: '#ffe58a'},
@@ -62,7 +62,7 @@ const SPECIAL = [
 ];
 let selP = SKINS[0], selB = SKINS[1], specialRow = 0, now = 0;
 function mkWizard(x, skin, isBot) {
-  return {x, y: H/2, r: 22, hp: 100, color: skin.c, skin, isBot, cd: 0, hitFlash: 0, vy: 0, moving: false};
+  return {x, y: H/2, r: 22, hp: 100, color: skin.c, skin, isBot, cd: 0, hitFlash: 0, vy: 0, moving: false, frozen: 0};
 }
 let player, bot, drawing, mouse = {x: W/2, y: H/2};
 
@@ -70,17 +70,18 @@ function reset() {
   player = mkWizard(120, selP, false);
   bot = mkWizard(W - 120, selB, true);
   bot.ai = {think: 1, tx: bot.y, drawing: null, wait: 1.2};
-  projectiles = []; particles = []; drawing = null; state = 'play'; msg = '';
+  projectiles = []; particles = []; beams = []; pending = []; drawing = null; state = 'play'; msg = '';
 }
 reset(); state = 'menu';
 
 addEventListener('keydown', e => {
   if (e.key.startsWith('Arrow')) { keys[e.key] = true; e.preventDefault(); }
+  if (e.key === 'm' || e.key === 'M') { keys.m = true; if (drawing) drawing.hold = true; }
   if (state === 'menu' && (e.key === 'Enter' || e.key === ' ')) reset();
   else if (state === 'over' && (e.key === 'Enter' || e.key === ' ')) reset();
-  else if (state !== 'menu' && (e.key === 'm' || e.key === 'M' || e.key === 'Escape')) { drawing = null; state = 'menu'; }
+  else if (state !== 'menu' && e.key === 'Escape') { drawing = null; state = 'menu'; }
 });
-addEventListener('keyup', e => { keys[e.key] = false; });
+addEventListener('keyup', e => { keys[e.key] = false; if (e.key === 'm' || e.key === 'M') keys.m = false; });
 
 function pos(e) {
   const r = cv.getBoundingClientRect();
@@ -91,9 +92,9 @@ cv.addEventListener('pointerdown', e => {
   if (state === 'menu') { menuClick(mouse); return; }
   if (state === 'special') { specialClick(mouse); return; }
   if (state !== 'play') { reset(); return; }
-  if (player.cd > 0) return;
+  if (player.cd > 0 || player.frozen > 0) return;
   cv.setPointerCapture(e.pointerId);
-  drawing = {pts: [mouse], sm: [mouse], len: 0};
+  drawing = {pts: [mouse], sm: [mouse], len: 0, hold: !!keys.m};
 });
 cv.addEventListener('pointermove', e => {
   mouse = pos(e);
@@ -103,20 +104,200 @@ cv.addEventListener('pointermove', e => {
   if (d < 3) return;
   drawing.pts.push(mouse);
   drawing.sm = smooth(drawing.pts);
+  drawing.star = isStar(drawing.pts) || isTriangle(drawing.pts);
+  drawing.flame = !drawing.star && isPentagon(drawing.pts);
+  drawing.heart = !drawing.star && !drawing.flame && isHeart(drawing.pts);
+  drawing.freeze = !drawing.star && !drawing.flame && !drawing.heart && isFreeze(drawing.pts);
   drawing.len = pathLen(drawing.sm);
 });
+// ---------- Stern-Erkennung (Pentagramm in einem Zug) ----------
+function rdp(p, eps) {
+  const keep = new Array(p.length).fill(false); keep[0] = keep[p.length - 1] = true;
+  const dist = (q, a, b) => {
+    const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((q.x - a.x) * dx + (q.y - a.y) * dy) / l2));
+    return Math.hypot(q.x - a.x - t * dx, q.y - a.y - t * dy);
+  };
+  const stack = [[0, p.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop(); let md = 0, mi = -1;
+    for (let i = a + 1; i < b; i++) { const d = dist(p[i], p[a], p[b]); if (d > md) { md = d; mi = i; } }
+    if (mi >= 0 && md > eps) { keep[mi] = true; stack.push([a, mi], [mi, b]); }
+  }
+  return p.filter((_, i) => keep[i]);
+}
+function isStar(pts) {
+  if (pts.length < 12) return false;
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  pts.forEach(p => { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); });
+  const size = Math.max(x1 - x0, y1 - y0);
+  if (size < 50) return false;
+  const a = pts[0], b = pts[pts.length - 1];
+  if (Math.hypot(a.x - b.x, a.y - b.y) > 0.4 * size) return false;       // muss (ungefaehr) geschlossen sein
+  const v = rdp(pts, 0.08 * size);
+  const segs = v.length - 1;
+  if (segs < 5 || segs > 7) return false;
+  for (let i = 0; i < segs; i++) if (Math.hypot(v[i+1].x - v[i].x, v[i+1].y - v[i].y) < 0.4 * size) return false;
+  let sharp = 0;
+  for (let i = 1; i < v.length - 1; i++) {
+    const ux = v[i].x - v[i-1].x, uy = v[i].y - v[i-1].y, wx = v[i+1].x - v[i].x, wy = v[i+1].y - v[i].y;
+    const cos = (ux * wx + uy * wy) / (Math.hypot(ux, uy) * Math.hypot(wx, wy) || 1);
+    if (Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI >= 100) sharp++;
+  }
+  return sharp >= 4;
+}
+function isTriangle(pts) {
+  if (pts.length < 10) return false;
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  pts.forEach(p => { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); });
+  const size = Math.max(x1 - x0, y1 - y0);
+  if (size < 50) return false;
+  const a = pts[0], b = pts[pts.length - 1];
+  if (Math.hypot(a.x - b.x, a.y - b.y) > 0.3 * size) return false;       // geschlossen
+  const v = rdp(pts, 0.08 * size);
+  if (v.length !== 4) return false;                                        // genau 3 Seiten
+  const P = [v[0], v[1], v[2]];
+  for (let i = 0; i < 3; i++) {                                            // Seitenlaenge
+    const m = P[i], n = P[(i + 1) % 3];
+    if (Math.hypot(n.x - m.x, n.y - m.y) < 0.3 * size) return false;
+  }
+  for (let i = 0; i < 3; i++) {                                            // Ecken muessen scharf sein
+    const p0 = P[(i + 2) % 3], p1 = P[i], p2 = P[(i + 1) % 3];
+    const ux = p1.x - p0.x, uy = p1.y - p0.y, wx = p2.x - p1.x, wy = p2.y - p1.y;
+    const cos = (ux * wx + uy * wy) / (Math.hypot(ux, uy) * Math.hypot(wx, wy) || 1);
+    if (Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI < 70) return false;
+  }
+  const area = Math.abs((P[1].x - P[0].x) * (P[2].y - P[0].y) - (P[2].x - P[0].x) * (P[1].y - P[0].y)) / 2;
+  return area > 0.08 * size * size;                                        // nicht zu flach
+}
+// ---------- Herz (heilt 10 Leben) ----------
+function isHeart(pts) {
+  if (pts.length < 15) return false;
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  pts.forEach(p => { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); });
+  const w = x1 - x0, h = y1 - y0, size = Math.max(w, h), asp = w / (h || 1);
+  if (size < 50 || asp < 0.7 || asp > 1.6) return false;
+  const a = pts[0], b = pts[pts.length - 1];
+  if (Math.hypot(a.x - b.x, a.y - b.y) > 0.3 * size) return false;        // geschlossen
+  const NB = 12, top = new Array(NB).fill(1e9), bot = new Array(NB).fill(-1e9);
+  for (const p of pts) {
+    const k = Math.min(NB - 1, Math.floor((p.x - x0) / w * NB));
+    top[k] = Math.min(top[k], p.y); bot[k] = Math.max(bot[k], p.y);
+  }
+  if (top.filter(v => v < 1e8).length < 10) return false;
+  const L = Math.min(...top.slice(1, 5)), R = Math.min(...top.slice(7, 11));
+  const mid = Math.min(top[5], top[6]);
+  if (mid - L < 0.1 * h || mid - R < 0.1 * h) return false;               // Einkerbung oben in der Mitte
+  if (Math.abs(L - R) > 0.25 * h) return false;                           // zwei aehnlich hohe Wulste
+  const c = Math.max(bot[4], bot[5], bot[6], bot[7]);
+  if (c < y1 - 0.08 * h) return false;                                    // tiefster Punkt in der Mitte
+  if (bot[2] > y1 - 0.15 * h || bot[9] > y1 - 0.15 * h) return false;     // unten spitz zulaufend
+  return true;
+}
+function castHeal(w) {
+  const before = w.hp; w.hp = Math.min(100, w.hp + 10);
+  floaters.push({x: w.x, y: w.y - 40, txt: '+' + Math.round(w.hp - before), life: 1.2, color: '#6dff9a'});
+  burst(w.x, w.y, '#ff7aa8', 25, 150); burst(w.x, w.y, '#6dff9a', 15, 100);
+  w.cd = 1.5;
+}
+
+// ---------- Fuenfeck (3 Flammenstrahlen im Bogen) ----------
+function isPentagon(pts) {
+  if (pts.length < 15) return false;
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  pts.forEach(p => { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); });
+  const size = Math.max(x1 - x0, y1 - y0), asp = (x1 - x0) / ((y1 - y0) || 1);
+  if (size < 60 || asp < 0.6 || asp > 1.67) return false;
+  const a = pts[0], b = pts[pts.length - 1];
+  if (Math.hypot(a.x - b.x, a.y - b.y) > 0.3 * size) return false;
+  const v = rdp(pts, 0.05 * size);
+  const turn = (p0, p1, p2) => {
+    const ux = p1.x - p0.x, uy = p1.y - p0.y, wx = p2.x - p1.x, wy = p2.y - p1.y;
+    const c = (ux * wx + uy * wy) / (Math.hypot(ux, uy) * Math.hypot(wx, wy) || 1);
+    return Math.acos(Math.max(-1, Math.min(1, c))) * 180 / Math.PI;
+  };
+  const nInt = v.length - 2;
+  if (nInt !== 4 && nInt !== 5) return false;
+  for (let i = 1; i < v.length - 1; i++) { const t = turn(v[i-1], v[i], v[i+1]); if (t < 40 || t > 110) return false; }
+  const closeTurn = turn(v[v.length - 2], v[v.length - 1], v[1]);   // Uebergang am Startpunkt
+  if (nInt === 4 && (closeTurn < 40 || closeTurn > 110)) return false;
+  if (nInt === 5 && closeTurn > 30) return false;
+  for (let i = 1; i < v.length - 2; i++) if (Math.hypot(v[i+1].x - v[i].x, v[i+1].y - v[i].y) < 0.25 * size) return false;
+  return true;
+}
+function castFlames(w) {
+  const arcs = [-1.0, 0.25, 1.0];                              // verschiedene Boegen
+  arcs.forEach((k, i) => pending.push({time: i * 0.18, fn: () => launchFlame(w, k)}));
+  w.cd = 2;
+}
+function launchFlame(w, off) {
+  if (state !== 'play') return;
+  const t = w.isBot ? player : bot, speed = 620;
+  const P0 = {x: w.x + (w.isBot ? -30 : 30), y: w.y};
+  const ang = Math.atan2(t.y - P0.y, t.x - P0.x) + off;          // Startrichtung abseits des Ziels -> Bogen
+  const shape = []; for (let i = 0; i < 10; i++) shape.push({x: Math.cos(i * 0.628) * 9, y: Math.sin(i * 0.628) * 9});
+  projectiles.push({x: P0.x, y: P0.y, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, dmg: 25, m: 12, shape, owner: w,
+    color: '#ff7a1a', flame: true, homing: t, ang, speed, life: 4});
+  burst(P0.x, P0.y, '#ffb347', 8, 140);
+}
+
+// ---------- Kreis (Einfrieren) ----------
+function circleOf(pts) {
+  const s = pts[0]; let maxd = 0, len = 0;
+  for (let j = 1; j < pts.length; j++) {
+    len += Math.hypot(pts[j].x - pts[j-1].x, pts[j].y - pts[j-1].y);
+    const d = Math.hypot(pts[j].x - s.x, pts[j].y - s.y); maxd = Math.max(maxd, d);
+    if (maxd > 40 && d < 0.3 * maxd && len > 2.4 * maxd) {
+      const c = smooth(pts.slice(0, j + 1));
+      let cx = 0, cy = 0; c.forEach(q => { cx += q.x; cy += q.y; }); cx /= c.length; cy /= c.length;
+      const ds = c.map(q => Math.hypot(q.x - cx, q.y - cy)), R = ds.reduce((a, b) => a + b, 0) / ds.length;
+      const sd = Math.sqrt(ds.reduce((a, b) => a + (b - R) * (b - R), 0) / ds.length);
+      let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+      c.forEach(q => { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); });
+      const asp = (x1 - x0) / ((y1 - y0) || 1);
+      if (R < 22 || sd / R > 0.22 || asp < 0.7 || asp > 1.4) return null;
+      return {cx, cy, R, end: j};
+    }
+  }
+  return null;
+}
+function isFreeze(pts) {
+  return pts.length >= 15 && !!circleOf(pts);        // ein einfacher Kreis genuegt
+}
+function castFreeze(w) {
+  const t = w.isBot ? player : bot;
+  beams.push({owner: w, target: t, life: 0.5, max: 0.5, c: ['#3d9bff', '#8fd0ff', '#ffffff']});
+  t.frozen = 3.5; t.moving = false;
+  if (t.ai) t.ai.drawing = null;
+  floaters.push({x: t.x, y: t.y - 40, txt: 'Eingefroren!', life: 1.2});
+  burst(t.x, t.y, '#9fdcff', 45, 260); burst(w.x, w.y, '#8fd0ff', 15, 160);
+  w.cd = 2;
+}
+function castBeam(w) {
+  const t = w.isBot ? player : bot;
+  beams.push({owner: w, target: t, life: 0.5, max: 0.5, c: ['#ffe680', '#fff2a0', '#fff']});
+  t.hp = Math.max(0, t.hp - 30); t.hitFlash = 0.35;
+  floaters.push({x: t.x, y: t.y - 30, txt: '-30', life: 1});
+  burst(t.x, t.y, '#fff2a0', 40, 300); burst(w.x, w.y, '#fff2a0', 15, 160);
+  w.cd = 1.5;
+}
+
 function release() {
   if (!drawing) return;
   const d = drawing; drawing = null;
   if (state !== 'play' || d.len < MIN_INK) return;
   let tx = mouse.x, ty = mouse.y;
   if (Math.hypot(tx - player.x, ty - player.y) < 40) { tx = bot.x; ty = bot.y; }
-  cast(player, d.pts, d.len, tx, ty);
+  if (d.flame) { castFlames(player); return; }
+  if (d.heart) { castHeal(player); return; }
+  if (d.freeze) { castFreeze(player); return; }
+  if (d.star) { castBeam(player); return; }
+  cast(player, d.pts, d.len, tx, ty, d.hold);
 }
 cv.addEventListener('pointerup', release);
 cv.addEventListener('pointercancel', release);
 
-function cast(w, rawPts, rawLen, tx, ty) {
+function cast(w, rawPts, rawLen, tx, ty, stay) {
   const pts = smooth(rawPts), len = pathLen(pts);
   const dmg = dmgOf(len);
   // Form in Originalgroesse um den Schwerpunkt
@@ -128,6 +309,14 @@ function cast(w, rawPts, rawLen, tx, ty) {
   let dx = t.x - w.x, dy = t.y - w.y;
   if (w.isBot) { dy = ty - w.y; }          // Bot nutzt seinen Vorhalt
   const dl = Math.hypot(dx, dy) || 1, sp = speedOf(len);
+  if (stay) {                                   // M gehalten: Zauber bleibt stehen, wo er gezeichnet wurde
+    const mine = projectiles.filter(q => q.placed && q.owner === w);
+    if (mine.length >= 3) mine[0].dead = true;  // max. 3 stehende Zauber pro Magier
+    projectiles.push({x: cx, y: cy, vx: 0, vy: 0, dmg, m, shape, owner: w, color: w.color, placed: true});
+    w.cd = cdOf(len);
+    burst(cx, cy, w.color, 8);
+    return;
+  }
   projectiles.push({x: w.x + dx / dl * 30, y: w.y + dy / dl * 30, vx: dx / dl * sp, vy: dy / dl * sp,
     dmg, m, shape, owner: w, color: w.color});
   w.cd = cdOf(len);
@@ -136,6 +325,16 @@ function cast(w, rawPts, rawLen, tx, ty) {
 
 function touches(p, x, y, rad) {
   for (const s of p.shape) if (Math.hypot(p.x + s.x - x, p.y + s.y - y) < rad) return true;
+  return false;
+}
+function sweptHit(p, w) {            // bewegten Zauber entlang seines Wegs gegen stehenden pruefen
+  const px = p.px === undefined ? p.x : p.px, py = p.py === undefined ? p.y : p.py;
+  const dx = p.x - px, dy = p.y - py, n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 6));
+  for (let k = 1; k <= n; k++) {
+    const ox = px + dx * k / n, oy = py + dy * k / n;
+    if (Math.hypot(ox - w.x, oy - w.y) > p.m + w.m + 10) continue;
+    for (const s of p.shape) if (touches(w, ox + s.x, oy + s.y, 7)) return true;
+  }
   return false;
 }
 function shapesTouch(a, b) {
@@ -160,6 +359,7 @@ function moveWizard(w, dx, dy, dt) {
 // ---------- Bot ----------
 function botAI(dt) {
   const ai = bot.ai;
+  if (bot.frozen > 0) { bot.moving = false; ai.drawing = null; return; }
   // Ausweichen
   let threat = null;
   for (const p of projectiles) if (p.owner === player && p.vx > 0 && p.x < bot.x) {
@@ -215,15 +415,49 @@ function botAI(dt) {
 function update(dt) {
   const dx = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0);
   const dy = (keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0);
-  if (state === 'play') { moveWizard(player, dx, dy, dt); botAI(dt); }
-  [player, bot].forEach(w => { w.cd = Math.max(0, w.cd - dt); w.hitFlash = Math.max(0, w.hitFlash - dt); });
+  if (state === 'play') { if (player.frozen > 0) player.moving = false; else moveWizard(player, dx, dy, dt); botAI(dt); }
+  [player, bot].forEach(w => { w.cd = Math.max(0, w.cd - dt); w.frozen = Math.max(0, w.frozen - dt); w.hitFlash = Math.max(0, w.hitFlash - dt); });
 
-  for (const p of projectiles) { p.x += p.vx * dt; p.y += p.vy * dt; }
+  for (const p of pending) p.time -= dt;
+  for (const p of pending.filter(q => q.time <= 0)) p.fn();
+  pending = pending.filter(q => q.time > 0);
+  for (const p of projectiles) {
+    p.px = p.x; p.py = p.y;
+    if (p.homing) {                                            // Flamme lenkt auf den Gegner ein
+      const t = p.homing, want = Math.atan2(t.y - p.y, t.x - p.x);
+      let diff = want - p.ang; while (diff > Math.PI) diff -= 6.2832; while (diff < -Math.PI) diff += 6.2832;
+      const maxTurn = 3.4 * dt; p.ang += Math.max(-maxTurn, Math.min(maxTurn, diff));
+      p.vx = Math.cos(p.ang) * p.speed; p.vy = Math.sin(p.ang) * p.speed;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.life -= dt; if (p.life <= 0) p.dead = true;
+    } else if (p.bez) {
+      const [A, B, C] = p.bez; p.bt += dt / p.dur;
+      const u = Math.min(1, p.bt), a = (1 - u) * (1 - u), b = 2 * (1 - u) * u, c = u * u;
+      p.x = a * A.x + b * B.x + c * C.x; p.y = a * A.y + b * B.y + c * C.y;
+      if (p.bt >= 1) {                                         // danach geradeaus weiter
+        let tx = C.x - B.x, ty = C.y - B.y; const l = Math.hypot(tx, ty) || 1;
+        p.vx = tx / l * p.speed; p.vy = ty / l * p.speed; p.bez = null;
+      }
+    } else { p.x += p.vx * dt; p.y += p.vy * dt; }
+    if (p.flame) for (let i = 0; i < 2; i++) particles.push({x: p.x + (Math.random() - 0.5) * 8, y: p.y + (Math.random() - 0.5) * 8,
+      vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40 - 20, life: 0.35, color: Math.random() < 0.5 ? '#ff7a1a' : '#ffd24a'});
+  }
 
   // Zauber gegen Zauber
   for (let i = 0; i < projectiles.length; i++) for (let j = i + 1; j < projectiles.length; j++) {
     const a = projectiles[i], b = projectiles[j];
     if (a.dead || b.dead || a.owner === b.owner) continue;
+    if (a.placed || b.placed) {                  // stehender Zauber: verschwindet, sobald er getroffen wird
+      if (a.placed && b.placed) continue;
+      const wall = a.placed ? a : b, mover = a.placed ? b : a;
+      if (sweptHit(mover, wall)) {
+        burst(wall.x, wall.y, wall.color, 16, 200);
+        wall.dead = true;
+        mover.dmg -= wall.dmg;
+        if (mover.dmg <= 0) mover.dead = true;
+      }
+      continue;
+    }
     if (Math.hypot(a.x - b.x, a.y - b.y) < a.m + b.m + 10 && shapesTouch(a, b)) {
       burst((a.x + b.x) / 2, (a.y + b.y) / 2, '#fff', 14, 200);
       if (a.dmg === b.dmg) {            // gleich stark: der Groessere bleibt
@@ -240,7 +474,7 @@ function update(dt) {
   }
   // Treffer
   for (const p of projectiles) {
-    if (p.dead) continue;
+    if (p.dead || p.placed) continue;
     const t = p.owner === player ? bot : player;
     if (Math.hypot(p.x - t.x, p.y - t.y) < p.m + t.r + 4 && touches(p, t.x, t.y, t.r)) {
       t.hp = Math.max(0, t.hp - p.dmg); t.hitFlash = 0.25; p.dead = true;
@@ -255,6 +489,8 @@ function update(dt) {
   particles = particles.filter(q => q.life > 0);
   for (const f of floaters) { f.y -= 30 * dt; f.life -= dt; }
   floaters = floaters.filter(f => f.life > 0);
+  for (const b of beams) b.life -= dt;
+  beams = beams.filter(b => b.life > 0);
 
   if (state === 'play' && (player.hp <= 0 || bot.hp <= 0)) {
     state = 'over'; drawing = null;
@@ -489,7 +725,7 @@ function renderMenu() {
   }
   button('Spielen');
   ctx.fillStyle = '#889'; ctx.font = '13px system-ui'; ctx.textAlign = 'center';
-  ctx.fillText('Skin anklicken · Enter oder „Spielen“ startet · im Spiel: M = zurück zum Menü', W/2, 505);
+  ctx.fillText('Skin anklicken · Enter oder „Spielen“ startet · im Spiel: Esc = zurück zum Menü', W/2, 505);
 }
 
 // ---------- Besondere Skins ----------
@@ -534,26 +770,53 @@ function render() {
   ctx.beginPath(); ctx.moveTo(W/2, 0); ctx.lineTo(W/2, H); ctx.stroke(); ctx.setLineDash([]);
 
   drawWizard(player); drawWizard(bot);
+  for (const w of [player, bot]) if (w.frozen > 0) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(140,205,255,0.45)'; ctx.strokeStyle = 'rgba(225,245,255,0.95)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(w.x - 30, w.y - 58, 60, 92, 10); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(w.x - 20, w.y - 44); ctx.lineTo(w.x - 20, w.y - 8); ctx.moveTo(w.x - 12, w.y - 50); ctx.lineTo(w.x + 4, w.y - 50); ctx.stroke();
+    ctx.fillStyle = '#000a'; ctx.fillRect(w.x - 25, w.y - 70, 50, 5);
+    ctx.fillStyle = '#8fd0ff'; ctx.fillRect(w.x - 25, w.y - 70, 50 * w.frozen / 3.5, 5);
+    ctx.restore();
+  }
 
   for (const p of projectiles) {
     ctx.save(); ctx.translate(p.x, p.y);
-    strokePath(p.shape, p.color, 9, 0.35);
-    strokePath(p.shape, '#fff', 3);
+    if (p.flame) {
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 17);
+      g.addColorStop(0, '#fff6c0'); g.addColorStop(0.35, '#ffb02e'); g.addColorStop(0.75, 'rgba(255,90,20,0.6)'); g.addColorStop(1, 'rgba(255,60,0,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, 17, 0, 7); ctx.fill();
+    } else {
+      strokePath(p.shape, p.color, 9, 0.35);
+      strokePath(p.shape, '#fff', 3);
+    }
+    ctx.restore();
+  }
+  for (const b of beams) {
+    const k = b.life / b.max, x1 = b.owner.x, y1 = b.owner.y, x2 = b.target.x, y2 = b.target.y;
+    ctx.save(); ctx.lineCap = 'round';
+    ctx.globalAlpha = k * 0.35; ctx.strokeStyle = b.c[0]; ctx.lineWidth = 46 * k + 8;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.globalAlpha = k * 0.7; ctx.strokeStyle = b.c[1]; ctx.lineWidth = 22 * k + 3;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.globalAlpha = k; ctx.strokeStyle = b.c[2]; ctx.lineWidth = 9 * k + 1;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
     ctx.restore();
   }
   for (const q of particles) { ctx.globalAlpha = Math.max(0, q.life); ctx.fillStyle = q.color; ctx.fillRect(q.x, q.y, 3, 3); }
   ctx.globalAlpha = 1;
   ctx.font = 'bold 20px system-ui'; ctx.textAlign = 'center';
-  for (const f of floaters) { ctx.globalAlpha = f.life; ctx.fillStyle = '#ffd24a'; ctx.fillText(f.txt, f.x, f.y); }
+  for (const f of floaters) { ctx.globalAlpha = f.life; ctx.fillStyle = f.color || '#ffd24a'; ctx.fillText(f.txt, f.x, f.y); }
   ctx.globalAlpha = 1;
 
   // Zeichnung des Spielers
   if (drawing) {
-    strokePath(drawing.sm, dmgOf(drawing.len) >= 20 ? '#ffd24a' : '#9df', 4);
+    strokePath(drawing.sm, drawing.heart ? '#ff7aa8' : drawing.flame ? '#ff9a3a' : drawing.freeze ? '#8fd0ff' : drawing.star ? '#fff2a0' : dmgOf(drawing.len) >= 20 ? '#ffd24a' : '#9df', 4);
     ctx.strokeStyle = '#ffffff44'; ctx.lineWidth = 1; ctx.setLineDash([4, 6]);
     ctx.beginPath(); ctx.moveTo(player.x, player.y); ctx.lineTo(mouse.x, mouse.y); ctx.stroke(); ctx.setLineDash([]);
     ctx.fillStyle = '#fff'; ctx.font = '16px system-ui'; ctx.textAlign = 'left';
-    ctx.fillText('Schaden: ' + (drawing.len >= MIN_INK ? dmgOf(drawing.len) : '–'), mouse.x + 14, mouse.y - 10);
+    ctx.fillText(drawing.heart ? '♥ +10 Leben' : drawing.flame ? '🔥 3 Flammen: je 25' : drawing.freeze ? '❄ Einfrieren' : drawing.hold && !drawing.star ? 'Bleibt stehen · Schaden: ' + (drawing.len >= MIN_INK ? dmgOf(drawing.len) : '–') : drawing.star ? '★ Lichtstrahl: 30' : 'Schaden: ' + (drawing.len >= MIN_INK ? dmgOf(drawing.len) : '–'), mouse.x + 14, mouse.y - 10);
   }
   // Bot zeichnet
   if (bot.ai.drawing) strokePath(smooth(bot.ai.drawing.pts), bot.color, 4, 0.8);
@@ -574,7 +837,7 @@ function render() {
     ctx.fillStyle = bot.hp <= 0 ? '#7f7' : '#f77'; ctx.font = 'bold 54px system-ui'; ctx.textAlign = 'center';
     ctx.fillText(msg, W/2, H/2 - 10);
     ctx.fillStyle = '#fff'; ctx.font = '20px system-ui';
-    ctx.fillText('Klick oder Enter: neue Runde · M: Menü', W/2, H/2 + 35);
+    ctx.fillText('Klick oder Enter: neue Runde · Esc: Menü', W/2, H/2 + 35);
   }
 }
 
