@@ -1,6 +1,30 @@
 <!DOCTYPE html>
 <html>
-  <body style="margin:0; background:#000">
+  <head>
+    <meta charset="utf-8">
+    <!-- Für Handys: nicht zoomen, Spiel füllt den Bildschirm -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <title>Magier-Moor</title>
+    <style>
+      html, body {
+        margin: 0; height: 100%; background: #000; overflow: hidden;
+        /* Kein Scrollen, Zoomen oder Markieren beim Wischen */
+        touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+      }
+      body { display: flex; align-items: center; justify-content: center; }
+      /* Das Spielfeld wird so groß wie möglich, behält aber sein Seitenverhältnis 4:3 */
+      canvas {
+        width: min(100vw, 800px, calc(100vh * 4 / 3)) !important;
+        width: min(100vw, 800px, calc(100dvh * 4 / 3)) !important;
+        height: auto !important;
+        touch-action: none;
+      }
+      #drehen { display: none; position: fixed; top: 10px; left: 0; right: 0; text-align: center; color: #ccc; font: 16px sans-serif; }
+      @media (orientation: portrait) and (pointer: coarse) { #drehen { display: block; } }
+    </style>
+  </head>
+  <body>
+    <div id="drehen">📱 Tipp: Handy quer halten, dann ist das Spiel größer.</div>
     <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
     <script>
       // Die Welt ist ein langer Weg von links nach rechts
@@ -96,7 +120,7 @@
           bossType: "schattenmagier",
           mobs: [],     // keine Monster
           arena: true,  // Keine Monster, kein Weg: eine große freie Fläche nur für dich und den Schattenmagier
-          banner: { text: "Neuer Zauber: Schutzschild! Duell gegen den Schattenmagier.", color: "#d58cff" },
+          banner: { text: "Neue Zauber: Schutzschild und Sternenregen!", color: "#d58cff" },
         },
       ];
 
@@ -145,23 +169,29 @@
 
       // Das Zauberbuch: Von Anfang an zwei Zauber
       let spells = [
-        { name: "Feuerzauber", color: "orangered", desc: "Brennt und verursacht Schaden" },
-        { name: "Giftzauber", color: "limegreen", desc: "Vergiftet und verlangsamt" },
+        { name: "Feuerzauber", icon: "🔥", color: "orangered", desc: "Brennt und verursacht Schaden" },
+        { name: "Giftzauber", icon: "🧪", color: "limegreen", desc: "Vergiftet und verlangsamt" },
       ];
       // Der neue Zauber, den du im zweiten Level lernst
-      const EIS = { name: "Eiszauber", color: "deepskyblue", desc: "Friert den Gegner für kurze Zeit ein" };
+      const EIS = { name: "Eiszauber", icon: "❄️", color: "deepskyblue", desc: "Friert den Gegner für kurze Zeit ein" };
       // Der neue Zauber, den du im dritten Level lernst
-      const BLITZ = { name: "Blitzzauber", color: "gold", desc: "Ein Blitz trifft sofort mit starkem Schaden" };
+      const BLITZ = { name: "Blitzzauber", icon: "⚡", color: "gold", desc: "Ein Blitz trifft sofort mit starkem Schaden" };
       // Der neue Zauber, den du im vierten Level lernst: kein Element, sondern Magie der Schwerkraft
-      const SCHWERKRAFT = { name: "Schwerkraftzauber", color: "mediumpurple", desc: "Erzeugt einen Strudel, der alle Gegner ringsum anzieht" };
+      const SCHWERKRAFT = { name: "Schwerkraftzauber", icon: "🌀", color: "mediumpurple", desc: "Erzeugt einen Strudel, der alle Gegner ringsum anzieht" };
       // Aktive Schwerkraft-Strudel
       let vortices = [];
       // Der neue Zauber, den du im fünften Level lernst: du rufst einen Verbündeten
-      const BESCHWOERUNG = { name: "Beschwörungszauber", color: "aqua", desc: "Ruft einen Lichtwolf, der 7 Sekunden kämpft" };
+      const BESCHWOERUNG = { name: "Beschwörungszauber", icon: "🐺", color: "aqua", desc: "Ruft einen Lichtwolf, der 7 Sekunden kämpft" };
       // Beschworene Lichtwölfe
       let allies = [];
       // Der neue Zauber, den du im sechsten Level lernst: schützt dich kurz vor allem Schaden
-      const SCHILD = { name: "Schutzschild", color: "violet", desc: "Schützt dich 2,5 Sekunden vor jedem Schaden (lädt 10 Sekunden)" };
+      const SCHILD = { name: "Schutzschild", icon: "🛡️", color: "violet", desc: "Schützt dich 2,5 Sekunden vor jedem Schaden (lädt 10 Sekunden)" };
+      // Der stärkste Zauber, ebenfalls im sechsten Level: Sterne stürzen vom Himmel
+      const STERN = { name: "Sternenregen", icon: "🌠", color: "#ffd84a", desc: "7 Sterne fallen vom Himmel und zerbrechen Schilde (lädt 15 Sekunden)" };
+      const STERN_CD = 900;   // 15 Sekunden Ladezeit
+      const STERN_DMG = 45;   // Schaden pro Stern
+      // Fallende Sterne
+      let stars = [];
       // Schattenrunen des Schattenmagiers: explodieren kurz nach dem Erscheinen
       let marks = [];
       // Kurze Effekte: Teleport-Wolken, Explosionen und Texte
@@ -191,7 +221,7 @@
         randomSeed(7 + level);
 
         // facing: 1 = schaut nach rechts, -1 = nach links; anim zählt die Animationsbilder
-        player = { x: 40, y: 300, speed: 3, hp: 100, maxHp: 100, facing: 1, moving: false, anim: 0, cast: 0, shield: 0, shieldCd: 0 };
+        player = { x: 40, y: 300, speed: 3, hp: 100, maxHp: 100, facing: 1, moving: false, anim: 0, cast: 0, shield: 0, shieldCd: 0, starCd: 0 };
         zombies = []; trees = []; puddles = []; shots = []; marks = []; puffs = [];
         won = false; menuOpen = false; bannerTimer = 240;
 
@@ -205,6 +235,9 @@
         if (level >= 4 && !spells.includes(BESCHWOERUNG)) spells.push(BESCHWOERUNG);
         // Im sechsten Level kommt der Schutzschild dazu
         if (level >= 5 && !spells.includes(SCHILD)) spells.push(SCHILD);
+        // ... und der Sternenregen, der stärkste Zauber im Spiel
+        if (level >= 5 && !spells.includes(STERN)) spells.push(STERN);
+        stars = [];
         bolts = []; vortices = []; allies = [];
 
         // Arena (Magierturm): eine große freie Fläche, nur du und der Schattenmagier
@@ -291,6 +324,7 @@
         drawMarks();
         for (let z of zombies) drawMob(z);
         drawBolts();
+        drawStars();
         drawPuffs();
         drawVortices();
         for (let a of allies) drawWolf(a);
@@ -299,12 +333,14 @@
         pop();
 
         drawHud();
+        drawTouchControls();
         if (menuOpen) drawMenu();
 
-        if (player.hp <= 0) endScreen("Du wurdest erwischt!", "red", "Klicken oder Enter: Level neu starten");
+        let weiter = isTouch ? "Tippen" : "Klicken oder Enter";
+        if (player.hp <= 0) endScreen("Du wurdest erwischt!", "red", weiter + ": Level neu starten");
         if (won) {
-          if (level < LEVELS.length - 1) endScreen("Level geschafft!", "lightgreen", "Klicken oder Enter: nächstes Level");
-          else endScreen("Alle Dörfer sind gerettet!", "lightgreen", "Klicken oder Enter: von vorne beginnen");
+          if (level < LEVELS.length - 1) endScreen("Level geschafft!", "lightgreen", weiter + ": nächstes Level");
+          else endScreen("Alle Dörfer sind gerettet!", "lightgreen", weiter + ": von vorne beginnen");
         }
         // Das Level-Menü liegt ganz oben
         if (levelMenuOpen) drawLevelMenu();
@@ -329,7 +365,7 @@
           text((i + 1) + ": " + LEVELS[i].name, width / 2, r.y + 33);
         }
         fill(170, 185, 230); textSize(13);
-        text("Level anklicken oder T drücken zum Schließen", width / 2, 65 + 120 + LEVELS.length * 62 - 14);
+        text(isTouch ? "Level antippen, daneben tippen zum Schließen" : "Level anklicken oder T drücken zum Schließen", width / 2, 65 + 120 + LEVELS.length * 62 - 14);
         textAlign(LEFT);
       }
 
@@ -340,15 +376,39 @@
         if (keyIsDown(RIGHT_ARROW) || keyIsDown(68)) dx += 1;
         if (keyIsDown(UP_ARROW) || keyIsDown(87)) dy -= 1;
         if (keyIsDown(DOWN_ARROW) || keyIsDown(83)) dy += 1;
+        // Auf dem Handy: Joystick (je weiter gezogen, desto schneller)
+        let j = joyDir();
+        dx = constrain(dx + j.x, -1, 1);
+        dy = constrain(dy + j.y, -1, 1);
         player.x += dx * player.speed;
         player.y += dy * player.speed;
         // Für die Animation merken: läuft der Magier, und wohin schaut er?
         player.moving = dx != 0 || dy != 0;
-        if (dx != 0) player.facing = dx;
+        if (abs(dx) > 0.2) player.facing = Math.sign(dx);
         player.anim++;
         if (player.cast > 0) player.cast--;
         if (player.shield > 0) player.shield--;
         if (player.shieldCd > 0) player.shieldCd--;
+        if (player.starCd > 0) player.starCd--;
+
+        // Sternenregen: Sterne fallen nacheinander und schlagen am Boden ein
+        for (let i = stars.length - 1; i >= 0; i--) {
+          let s = stars[i];
+          if (s.delay > 0) { s.delay--; continue; }
+          // Wurde ein Gegner angetippt, folgen die Sterne ihm (auch wenn er sich teleportiert)
+          if (s.target && zombies.includes(s.target)) { s.tx = s.target.x + s.ox; s.ty = s.target.y + s.oy; }
+          if (++s.t < s.fall) continue;
+          for (let z of zombies) {
+            if (dist(z.x, z.y, s.tx, s.ty) > 75) continue;
+            z.hp -= STERN_DMG;
+            z.awake = true;
+            // Sterne zerbrechen den Schild des Schattenmagiers
+            if (z.shield > 0) { z.shield = 0; puff(z.x, z.y - 95, [255, 230, 120], 0, "Schild zerbrochen!"); }
+          }
+          puff(s.tx, s.ty, [255, 220, 80], 120);
+          puff(s.tx, s.ty, [255, 255, 255], 50);
+          stars.splice(i, 1);
+        }
         // Das Dorftor bleibt zu, solange noch Gegner leben
         let maxX = zombies.length > 0 ? VILLAGE_X - 40 : WORLD;
         // In der Arena kommst du nicht hinter die linke Mauer zurück
@@ -595,6 +655,39 @@
         z.hits = 0;
         z.shotTimer = max(z.shotTimer, 35); // kurze Pause nach dem Teleport, damit es fair bleibt
         puff(z.x, z.y - 20, [170, 90, 255], 80);
+      }
+
+      // Sternenregen: goldener Zielkreis am Boden, dann stürzt der Stern schräg vom Himmel mit Schweif
+      function drawStars() {
+        for (let s of stars) {
+          let p = s.delay > 0 ? 0 : s.t / s.fall;
+          // Zielkreis: wird heller, je näher der Stern kommt
+          noFill(); stroke(255, 220, 80, 80 + p * 175); strokeWeight(2);
+          ellipse(s.tx, s.ty, 60 + (1 - p) * 30, (60 + (1 - p) * 30) * 0.5);
+          noStroke();
+          if (s.delay > 0) continue;
+          // Der Stern fällt immer schneller (p * p)
+          let e = p * p;
+          let sx = lerp(s.tx + 170, s.tx, e), sy = lerp(-60, s.ty, e);
+          // Schweif
+          for (let k = 1; k <= 6; k++) {
+            let q = max(0, e - k * 0.04);
+            fill(255, 210, 90, 160 - k * 25);
+            circle(lerp(s.tx + 170, s.tx, q), lerp(-60, s.ty, q), 18 - k * 2);
+          }
+          // Leuchtender fünfzackiger Stern, der sich dreht
+          push(); translate(sx, sy); rotate(frameCount * 0.2);
+          fill(255, 230, 120, 120); circle(0, 0, 40);
+          fill(255, 245, 170);
+          beginShape();
+          for (let i = 0; i < 10; i++) {
+            let r = i % 2 == 0 ? 14 : 6, a = -HALF_PI + i * PI / 5;
+            vertex(cos(a) * r, sin(a) * r);
+          }
+          endShape(CLOSE);
+          fill(255); circle(0, 0, 6);
+          pop();
+        }
       }
 
       // Schattenrunen: Kreis füllt sich, bis er explodiert
@@ -1488,19 +1581,36 @@
         // Textfarbe passend zum Hintergrund
         let hell = level == 1;
         fill(hell ? 40 : 255);
-        text("B = Zauberbuch | T = Level wählen | Laufen: WASD oder Pfeile", 10, 58);
-        text(zombies.length > 0 ? "Gegner übrig: " + zombies.length + " (töte alle, dann öffnet sich das Dorftor)" : "Alle Gegner tot! Geh ins Dorf.", 10, 78);
+        if (isTouch) {
+          // Auf dem Handy: kürzere, etwas größere Texte (das Spielfeld ist dort kleiner)
+          textSize(16);
+          text("Ziehen = laufen | Gegner antippen = zaubern", 10, 60);
+          text(zombies.length > 0 ? "Gegner übrig: " + zombies.length : "Alle Gegner tot! Geh ins Dorf.", 10, 82);
+        } else {
+          text("B = Zauberbuch | T = Level wählen | Laufen: WASD oder Pfeile", 10, 58);
+          text(zombies.length > 0 ? "Gegner übrig: " + zombies.length + " (töte alle, dann öffnet sich das Dorftor)" : "Alle Gegner tot! Geh ins Dorf.", 10, 78);
+        }
         if (selectedSpell) {
           fill(selectedSpell.color);
-          let how = selectedSpell === SCHILD || selectedSpell === BESCHWOERUNG ? "irgendwohin klicken" : "auf einen Gegner klicken";
-          text("Bereit: " + selectedSpell.name + " (" + how + ")", 10, 98);
+          let how = selectedSpell === SCHILD || selectedSpell === BESCHWOERUNG
+            ? (isTouch ? "irgendwohin tippen" : "irgendwohin klicken")
+            : (isTouch ? "Gegner antippen" : "auf einen Gegner klicken");
+          text("Bereit: " + selectedSpell.name + " (" + how + ")", 10, isTouch ? 104 : 98);
         }
-        // Ladeanzeige des Schutzschilds
-        if (spells.includes(SCHILD)) {
+        textSize(14);
+        // Ladeanzeigen für Schutzschild und Sternenregen (auf dem Handy zeigen das die Knöpfe)
+        if (spells.includes(SCHILD) && !isTouch) {
           fill(0, 150); rect(10, 108, 160, 16, 4);
           fill(120, 60, 160); rect(12, 110, 156 * (1 - player.shieldCd / 600), 12, 3);
           fill(255); textSize(11);
           text(player.shield > 0 ? "Schild aktiv!" : player.shieldCd > 0 ? "Schild lädt ..." : "Schild bereit", 18, 120);
+          textSize(14);
+        }
+        if (spells.includes(STERN) && !isTouch) {
+          fill(0, 150); rect(10, 128, 160, 16, 4);
+          fill(190, 150, 30); rect(12, 130, 156 * (1 - player.starCd / STERN_CD), 12, 3);
+          fill(255); textSize(11);
+          text(player.starCd > 0 ? "Sternenregen lädt ..." : "Sternenregen bereit", 18, 140);
           textSize(14);
         }
 
@@ -1541,13 +1651,15 @@
       }
 
       // Position der Zauber im Menü
-      function spellRect(i) { return { x: 200, y: 142 + i * 47, w: 400, h: 42 }; }
+      function spellRect(i) { return { x: 200, y: 112 + i * 47, w: 400, h: 42 }; }
+      // Das Zauberbuch selbst (Platz für 8 Zauber)
+      const BOOK = { x: 150, y: 60, w: 500, h: 490 };
 
       function drawMenu() {
         fill(0, 190); rect(0, 0, width, height);
-        fill(70, 40, 20); rect(150, 100, 500, 400, 12);
+        fill(70, 40, 20); rect(BOOK.x, BOOK.y, BOOK.w, BOOK.h, 12);
         fill(240, 220, 170); textAlign(CENTER); textSize(28);
-        text("Zauberbuch", width / 2, 130);
+        text("Zauberbuch", width / 2, 96);
         for (let i = 0; i < spells.length; i++) {
           let r = spellRect(i), s = spells[i];
           fill(100, 65, 35); stroke(s.color); strokeWeight(selectedSpell === s ? 4 : 1);
@@ -1555,7 +1667,7 @@
           noStroke(); fill(s.color); textSize(17); text(s.name, width / 2, r.y + 18);
           fill(240, 220, 170); textSize(12); text(s.desc, width / 2, r.y + 35);
         }
-        textSize(14); text("Zauber anklicken, dann auf einen Gegner klicken", width / 2, 488);
+        textSize(14); text(isTouch ? "Zauber antippen, dann einen Gegner antippen" : "Zauber anklicken, dann auf einen Gegner klicken", width / 2, 532);
         textAlign(LEFT);
       }
 
@@ -1566,30 +1678,33 @@
         else startLevel(0);
       }
 
+      // Mausklick: Maus und Finger benutzen dieselbe Funktion
       function mousePressed() {
-        // Level-Menü: Level anklicken und dorthin springen
+        handleClick(mouseX, mouseY, 0);
+      }
+
+      // Klick oder Antippen an der Stelle (px, py). tol = wie viel daneben noch als Treffer zählt (Finger sind ungenau)
+      function handleClick(px, py, tol) {
+        const inside = (r) => px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h;
+        // Level-Menü: Level anklicken und dorthin springen, daneben tippen schließt es
         if (levelMenuOpen) {
           for (let i = 0; i < LEVELS.length; i++) {
-            let r = levelRect(i);
-            if (mouseX > r.x && mouseX < r.x + r.w && mouseY > r.y && mouseY < r.y + r.h) {
-              levelMenuOpen = false;
-              startLevel(i);
-            }
+            if (inside(levelRect(i))) { levelMenuOpen = false; startLevel(i); return; }
           }
+          if (!inside({ x: 200, y: 65, w: 400, h: 120 + LEVELS.length * 62 })) levelMenuOpen = false;
           return;
         }
         if (won || player.hp <= 0) { nextAction(); return; }
         if (menuOpen) {
-          // Im Menü: Zauber auswählen und Buch schließen
+          // Im Menü: Zauber auswählen und Buch schließen, daneben tippen schließt das Buch
           for (let i = 0; i < spells.length; i++) {
-            let r = spellRect(i);
-            if (mouseX > r.x && mouseX < r.x + r.w && mouseY > r.y && mouseY < r.y + r.h) {
-              selectedSpell = spells[i];
-              menuOpen = false;
-            }
+            if (inside(spellRect(i))) { selectedSpell = spells[i]; menuOpen = false; return; }
           }
+          if (!inside(BOOK)) menuOpen = false;
           return;
         }
+        // Knöpfe auf dem Bildschirm (Handy): Zauberleiste, Zauberbuch, Level
+        if (touchButtonAt(px, py)) return;
         // Außerhalb des Menüs: Gegner anklicken (Mausposition plus Kamera), Zauber wirken
         if (!selectedSpell) return;
         // Beschwörung braucht kein Ziel: der Lichtwolf erscheint neben dem Magier (höchstens 3 gleichzeitig)
@@ -1599,41 +1714,64 @@
           player.cast = 18;
           return;
         }
+        // Sternenregen: auf einen Gegner oder irgendwohin. Danach muss er 15 Sekunden aufladen.
+        if (selectedSpell === STERN) {
+          if (player.starCd > 0) { puff(player.x, player.y - 60, [255, 230, 150], 0, "Sterne laden noch!"); return; }
+          let target = mobAt(px, py, tol);
+          let cx = target ? target.x : px + camX, cy = target ? target.y : py;
+          for (let k = 0; k < 7; k++) {
+            // Der erste Stern trifft genau die Mitte, die anderen landen ringsum
+            let a = random(TWO_PI), r = k == 0 ? 0 : random(25, 85);
+            let ox = cos(a) * r, oy = sin(a) * r * 0.6;
+            stars.push({ target: target, ox: ox, oy: oy, tx: cx + ox, ty: cy + oy, delay: 10 + k * 7, t: 0, fall: 32 });
+          }
+          player.starCd = STERN_CD;
+          player.cast = 30;
+          if (target) player.facing = target.x < player.x ? -1 : 1;
+          return;
+        }
         // Schutzschild braucht auch kein Ziel, muss aber nach dem Benutzen erst aufladen
         if (selectedSpell === SCHILD) {
           if (player.shieldCd <= 0) { player.shield = 150; player.shieldCd = 600; player.cast = 18; }
           else puff(player.x, player.y - 60, [230, 200, 255], 0, "Schild lädt noch!");
           return;
         }
+        let z = mobAt(px, py, tol);
+        if (!z) return;
+        // Schild des Schattenmagiers: der Zauber prallt zurück und trifft dich selbst
+        if (z.shield > 0) {
+          puff(z.x, z.y - 22, [220, 150, 255], 70);
+          puff(z.x, z.y - 95, [255, 200, 255], 0, "Abgewehrt!");
+          if (player.shield <= 0) { player.hp -= 6; puff(player.x, player.y - 8, [220, 120, 255], 40); }
+          player.cast = 18;
+          return;
+        }
+        if (selectedSpell.name == "Feuerzauber") z.burn = 300;
+        if (selectedSpell.name == "Giftzauber") z.poison = 600;
+        if (selectedSpell.name == "Eiszauber") z.freeze = MOBS[z.type].boss ? 90 : 240; // Boss friert nur kurz
+        // Schwerkraft: ein Strudel an der Stelle des Gegners (2,5 Sekunden)
+        if (selectedSpell.name == "Schwerkraftzauber") vortices.push({ x: z.x, y: z.y, life: 150 });
+        if (selectedSpell.name == "Blitzzauber") {
+          z.hp -= 30; // sofortiger Schaden
+          bolts.push({ x: z.x, y: z.y, life: 14, seed: random(10) });
+        }
+        z.awake = true;
+        // Nach einigen Treffern weicht der Schattenmagier per Teleport aus
+        if (MOBS[z.type].wizard && ++z.hits >= 5) teleportWizard(z, z.hp < MOBS[z.type].hp * 0.5);
+        player.cast = 18; // Zauber-Animation
+        player.facing = z.x < player.x ? -1 : 1;
+      }
+
+      // Welcher Gegner liegt unter dem Punkt (Bildschirm-Koordinaten)? Bei mehreren der nächste.
+      function mobAt(px, py, tol) {
+        let best = null, bestD = Infinity;
         for (let z of zombies) {
           // Der Schattenmagier ist größer gezeichnet: Trefferfläche um seinen Körper
           let zy = MOBS[z.type].wizard ? z.y - 18 : z.y;
-          if (dist(mouseX + camX, mouseY, z.x, zy) < (MOBS[z.type].hitR || 20)) {
-            // Schild des Schattenmagiers: der Zauber prallt zurück und trifft dich selbst
-            if (z.shield > 0) {
-              puff(z.x, z.y - 22, [220, 150, 255], 70);
-              puff(z.x, z.y - 95, [255, 200, 255], 0, "Abgewehrt!");
-              if (player.shield <= 0) { player.hp -= 6; puff(player.x, player.y - 8, [220, 120, 255], 40); }
-              player.cast = 18;
-              break;
-            }
-            if (selectedSpell.name == "Feuerzauber") z.burn = 300;
-            if (selectedSpell.name == "Giftzauber") z.poison = 600;
-            if (selectedSpell.name == "Eiszauber") z.freeze = MOBS[z.type].boss ? 90 : 240; // Boss friert nur kurz
-            // Schwerkraft: ein Strudel an der Stelle des Gegners (2,5 Sekunden)
-            if (selectedSpell.name == "Schwerkraftzauber") vortices.push({ x: z.x, y: z.y, life: 150 });
-            if (selectedSpell.name == "Blitzzauber") {
-              z.hp -= 30; // sofortiger Schaden
-              bolts.push({ x: z.x, y: z.y, life: 14, seed: random(10) });
-            }
-            z.awake = true;
-            // Nach einigen Treffern weicht der Schattenmagier per Teleport aus
-            if (MOBS[z.type].wizard && ++z.hits >= 5) teleportWizard(z, z.hp < MOBS[z.type].hp * 0.5);
-            player.cast = 18; // Zauber-Animation
-            player.facing = z.x < player.x ? -1 : 1;
-            break;
-          }
+          let d = dist(px + camX, py, z.x, zy);
+          if (d < (MOBS[z.type].hitR || 20) + tol && d < bestD) { best = z; bestD = d; }
         }
+        return best;
       }
 
       function keyPressed() {
@@ -1642,6 +1780,122 @@
         if (levelMenuOpen) return;
         if ((won || player.hp <= 0) && keyCode === ENTER) { nextAction(); return; }
         if (key === "b" || key === "B") menuOpen = !menuOpen;
+      }
+
+      // ---------- Steuerung mit dem Finger (Handy, Tablet) ----------
+      // isTouch: wird ein Touchscreen benutzt? Dann zeigen wir Knöpfe auf dem Bildschirm.
+      let isTouch = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+      // Joystick: Finger irgendwo hinlegen und ziehen = laufen
+      let joy = null;
+      const JOY_R = 60;
+
+      // Spielt man gerade (kein Menü, nicht gewonnen oder verloren)?
+      function playing() { return !menuOpen && !levelMenuOpen && !won && player.hp > 0; }
+
+      // Fingerposition in Spielfeld-Koordinaten (das Spielfeld ist auf dem Handy kleiner gezeichnet)
+      function touchPos(t) {
+        let r = document.querySelector("canvas").getBoundingClientRect();
+        return { x: (t.clientX - r.left) * width / r.width, y: (t.clientY - r.top) * height / r.height };
+      }
+
+      // Die Knöpfe: Zauberleiste rechts, darüber Zauberbuch und Level
+      function touchButtons() {
+        let b = [];
+        b.push({ x: width - 186, y: 32, w: 84, h: 30, label: "📖 Buch", act: () => { menuOpen = true; } });
+        b.push({ x: width - 94, y: 32, w: 84, h: 30, label: "🗺️ Level", act: () => { levelMenuOpen = true; menuOpen = false; } });
+        for (let i = 0; i < spells.length; i++) {
+          let s = spells[i];
+          b.push({ x: width - 56, y: 78 + i * 52, w: 46, h: 46, spell: s, act: () => { selectedSpell = s; } });
+        }
+        return b;
+      }
+
+      // Wurde ein Knopf angetippt? Dann ausführen.
+      function touchButtonAt(px, py) {
+        if (!isTouch) return false;
+        for (let b of touchButtons()) {
+          if (px > b.x - 6 && px < b.x + b.w + 6 && py > b.y - 4 && py < b.y + b.h + 4) { b.act(); return true; }
+        }
+        return false;
+      }
+
+      function touchStarted(e) {
+        isTouch = true;
+        if (!e || !e.changedTouches) return false;
+        for (let t of e.changedTouches) {
+          let p = touchPos(t);
+          let onButton = touchButtons().some(b => p.x > b.x - 6 && p.x < b.x + b.w + 6 && p.y > b.y - 4 && p.y < b.y + b.h + 4);
+          let onMob = selectedSpell && mobAt(p.x, p.y, 16);
+          // Auf Knopf oder Gegner: antippen. Sonst wird der Finger zum Joystick.
+          if (playing() && !joy && !onButton && !onMob) joy = { id: t.identifier, ox: p.x, oy: p.y, x: p.x, y: p.y, start: millis() };
+          else handleClick(p.x, p.y, 16);
+        }
+        return false; // verhindert Scrollen, Zoomen und doppelte Mausklicks
+      }
+
+      function touchMoved(e) {
+        if (!e || !e.changedTouches) return false;
+        for (let t of e.changedTouches) {
+          if (!joy || t.identifier !== joy.id) continue;
+          let p = touchPos(t);
+          joy.x = p.x; joy.y = p.y;
+          // Zieht der Finger weit weg, wandert der Joystick mit
+          let d = dist(joy.ox, joy.oy, p.x, p.y);
+          if (d > JOY_R) { joy.ox = p.x - (p.x - joy.ox) / d * JOY_R; joy.oy = p.y - (p.y - joy.oy) / d * JOY_R; }
+        }
+        return false;
+      }
+
+      function touchEnded(e) {
+        if (!e || !e.changedTouches) return false;
+        for (let t of e.changedTouches) {
+          if (!joy || t.identifier !== joy.id) continue;
+          // Nur kurz getippt, nicht gezogen: zählt als Antippen (z.B. für Schutzschild oder Beschwörung)
+          if (millis() - joy.start < 250 && dist(joy.ox, joy.oy, joy.x, joy.y) < 12) handleClick(joy.x, joy.y, 16);
+          joy = null;
+        }
+        return false;
+      }
+
+      // Richtung des Joysticks: x und y zwischen -1 und 1
+      function joyDir() {
+        if (!joy) return { x: 0, y: 0 };
+        let jx = joy.x - joy.ox, jy = joy.y - joy.oy, l = mag(jx, jy);
+        if (l < 8) return { x: 0, y: 0 };
+        let k = min(l, JOY_R) / JOY_R;
+        return { x: jx / l * k, y: jy / l * k };
+      }
+
+      // Knöpfe und Joystick zeichnen (nur auf dem Handy)
+      function drawTouchControls() {
+        if (!isTouch || !playing()) return;
+        textAlign(CENTER);
+        for (let b of touchButtons()) {
+          if (b.spell) {
+            let s = b.spell, cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+            fill(0, 150); stroke(s.color); strokeWeight(selectedSpell === s ? 4 : 1.5);
+            circle(cx, cy, b.w);
+            noStroke(); textSize(22); fill(255); text(s.icon, cx, cy + 8);
+            // Schutzschild oder Sternenregen lädt: dunkler Schatten über dem Knopf
+            let cd = s === SCHILD ? player.shieldCd / 600 : s === STERN ? player.starCd / STERN_CD : 0;
+            if (cd > 0) { fill(0, 160); arc(cx, cy, b.w, b.w, -HALF_PI, -HALF_PI + TWO_PI * cd, PIE); }
+          } else {
+            fill(0, 150); stroke(200); strokeWeight(1); rect(b.x, b.y, b.w, b.h, 8);
+            noStroke(); fill(255); textSize(14); text(b.label, b.x + b.w / 2, b.y + 20);
+          }
+        }
+        textAlign(LEFT);
+        // Joystick unter dem Finger
+        if (joy) {
+          let d = joyDir();
+          fill(255, 255, 255, 40); stroke(255, 255, 255, 120); strokeWeight(2); circle(joy.ox, joy.oy, JOY_R * 2);
+          noStroke(); fill(255, 255, 255, 150); circle(joy.ox + d.x * JOY_R, joy.oy + d.y * JOY_R, 44);
+        } else if (bannerTimer > 0) {
+          // Am Levelanfang: Hinweis, wie man läuft
+          fill(255, 255, 255, 30); stroke(255, 255, 255, 90); strokeWeight(2); circle(110, 470, JOY_R * 2);
+          noStroke(); fill(255, 255, 255, 90); circle(110, 470, 44);
+          fill(255, 200); textAlign(CENTER); textSize(13); text("Finger ziehen = laufen", 110, 555); textAlign(LEFT);
+        }
       }
     </script>
   </body>
