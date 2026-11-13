@@ -1,0 +1,1240 @@
+<!DOCTYPE html>
+<html>
+  <body style="margin:0; background:#000">
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
+    <script>
+      // Die Welt ist ein langer Weg von links nach rechts
+      const WORLD = 3200;
+      // Halbe Breite des Weges
+      const PATH_W = 70;
+      // Hier beginnt das Dorf am Ende des Weges
+      const VILLAGE_X = WORLD - 450;
+
+      // Die Level: Aussehen und Gegner
+      const LEVELS = [
+        {
+          name: "Das Moor",
+          bg: [12, 20, 16],
+          pathOuter: [60, 45, 30], pathInner: [80, 62, 40],
+          puddle: [25, 55, 50],
+          villageGround: [45, 75, 40], wall: [150, 110, 70], roof: [140, 50, 40], flatRoof: false,
+          decor: "baum",
+          plants: 1400,
+          mobs: ["zombie"],
+          spacing: [200, 320],
+        },
+        {
+          name: "Die Wüste",
+          bg: [214, 178, 110],
+          pathOuter: [170, 135, 80], pathInner: [195, 160, 100],
+          puddle: [150, 115, 65],
+          villageGround: [225, 195, 130], wall: [235, 215, 170], roof: [190, 130, 80], flatRoof: true,
+          decor: "kaktus",
+          plants: 550,
+          mobs: ["zombie", "skorpion"],
+          spacing: [170, 270],
+          banner: { text: "Neuer Zauber im Zauberbuch: Eiszauber!", color: "#0078c8" },
+        },
+        {
+          name: "Der Vulkan",
+          bg: [28, 12, 10],
+          pathOuter: [50, 35, 32], pathInner: [75, 55, 50],
+          puddle: [200, 50, 10],
+          villageGround: [80, 60, 55], wall: [120, 100, 95], roof: [90, 40, 35], flatRoof: false,
+          decor: "vulkan",
+          plants: 650,
+          lava: true,   // Lavabecken verbrennen den Magier
+          pools: 30,
+          boss: true,   // Endboss vor dem Dorf
+          mobs: ["zombie", "skorpion", "schleim", "imp"],
+          spacing: [180, 280],
+          banner: { text: "Neuer Zauber: Blitzzauber! Am Ende wartet ein Endboss.", color: "#e0a000" },
+        },
+        {
+          name: "Der Friedhof",
+          bg: [16, 14, 28],
+          pathOuter: [48, 44, 62], pathInner: [72, 68, 90],
+          puddle: [50, 55, 85],
+          villageGround: [75, 75, 100], wall: [150, 145, 165], roof: [60, 60, 115], flatRoof: false,
+          decor: "friedhof",
+          plants: 650,
+          pools: 12,
+          count: 9,     // Genau neun Gegner, gleichmäßig auf dem Weg verteilt
+          mobs: ["skelett", "geist"],
+          spacing: [200, 260],
+          banner: { text: "Neuer Zauber: Schwerkraftzauber! Neun Gegner bewachen den Friedhof.", color: "#c9a0ff" },
+        },
+        {
+          name: "Die Kristallhöhle",
+          bg: [10, 12, 30],
+          pathOuter: [35, 45, 80], pathInner: [55, 70, 112],
+          puddle: [30, 80, 140],
+          villageGround: [55, 75, 120], wall: [150, 170, 215], roof: [115, 75, 175], flatRoof: false,
+          decor: "kristall",
+          plants: 600,
+          pools: 14,
+          boss: true,   // Starker Endboss vor dem Dorf
+          bossType: "kristallkoenig",
+          mobs: ["kaefer", "imp", "skorpion", "kaefer"],
+          spacing: [150, 230],
+          banner: { text: "Neuer Zauber: Beschwörung! Am Ende wartet der Kristallkönig.", color: "#7fd7ff" },
+        },
+      ];
+
+      // Die Gegnerarten
+      const MOBS = {
+        zombie: { hp: 60, speed: 1.1, dmg: 0.2, wake: 280, size: 30 },
+        skorpion: { hp: 40, speed: 1.9, dmg: 0.3, wake: 330, size: 26 },
+        // Endboss: groß, langsam, feuerfest, wirft Feuerbälle
+        boss: {
+          name: "Lavagolem", boss: true, hp: 220, speed: 0.7, dmg: 0.5, wake: 420, size: 60, reach: 46, hitR: 40, fireRes: 0.5,
+          shootEvery: 130, shotDmg: 12, shotSpeed: 3.4,
+        },
+        // Neue Monster im Vulkan
+        schleim: { hp: 90, speed: 0.8, dmg: 0.35, wake: 280, size: 30, fireRes: 0.3 },   // zäh und feuerfest
+        imp: { hp: 35, speed: 1.6, dmg: 0.25, wake: 380, size: 24, keep: 150, shootEvery: 170, shotDmg: 6, shotSpeed: 2.8, shotRange: 380, hitR: 22 }, // Fernkämpfer
+        // Neue Monster auf dem Friedhof
+        skelett: { hp: 55, speed: 1.2, dmg: 0.3, wake: 300, size: 28, hitR: 22 },
+        geist: { hp: 40, speed: 1.4, dmg: 0.25, wake: 360, size: 26, hitR: 22, poisonRes: 0.2 }, // Gift wirkt kaum
+        // Kristallhöhle: gepanzerter Käfer (Feuer und Gift wirken kaum, Blitz und Schwerkraft schon)
+        kaefer: { hp: 130, speed: 1.2, dmg: 0.5, wake: 330, size: 30, hitR: 22, fireRes: 0.4, poisonRes: 0.4 },
+        // Starker Endboss: viele Leben, Splitterfächer, ruft bei halbem Leben Verstärkung
+        kristallkoenig: {
+          name: "Kristallkönig", boss: true, hp: 800, speed: 0.95, dmg: 1.0, wake: 460, size: 64, reach: 50, hitR: 42, fireRes: 0.4,
+          shootEvery: 95, shotDmg: 14, shotSpeed: 4.0, spread: 3, shotColor: [120, 220, 255], rage: true, summonAt: 0.5,
+        },
+      };
+
+      let level = 0;
+
+      // Spieler (der Magier)
+      let player;
+
+      // Gegner, Pflanzen und Pfützen
+      let zombies = [];
+      let trees = [];
+      let puddles = [];
+      // Feuerbälle des Endbosses
+      let shots = [];
+
+      // Das Zauberbuch: Von Anfang an zwei Zauber
+      let spells = [
+        { name: "Feuerzauber", color: "orangered", desc: "Brennt und verursacht Schaden" },
+        { name: "Giftzauber", color: "limegreen", desc: "Vergiftet und verlangsamt" },
+      ];
+      // Der neue Zauber, den du im zweiten Level lernst
+      const EIS = { name: "Eiszauber", color: "deepskyblue", desc: "Friert den Gegner für kurze Zeit ein" };
+      // Der neue Zauber, den du im dritten Level lernst
+      const BLITZ = { name: "Blitzzauber", color: "gold", desc: "Ein Blitz trifft sofort mit starkem Schaden" };
+      // Der neue Zauber, den du im vierten Level lernst: kein Element, sondern Magie der Schwerkraft
+      const SCHWERKRAFT = { name: "Schwerkraftzauber", color: "mediumpurple", desc: "Erzeugt einen Strudel, der alle Gegner ringsum anzieht" };
+      // Aktive Schwerkraft-Strudel
+      let vortices = [];
+      // Der neue Zauber, den du im fünften Level lernst: du rufst einen Verbündeten
+      const BESCHWOERUNG = { name: "Beschwörungszauber", color: "aqua", desc: "Ruft einen Lichtwolf, der 7 Sekunden kämpft" };
+      // Beschworene Lichtwölfe
+      let allies = [];
+      // Blitze, die gerade zu sehen sind
+      let bolts = [];
+
+      // Ist das Zauberbuch offen? Welcher Zauber ist ausgewählt?
+      let menuOpen = false;
+      // Ist das Level-Menü (Taste T) offen?
+      let levelMenuOpen = false;
+      let selectedSpell = null;
+      let won = false;
+      // Kamera folgt dem Magier
+      let camX = 0;
+      // Meldung am Levelanfang
+      let bannerTimer = 0;
+
+      function setup() {
+        createCanvas(800, 600);
+        startLevel(0);
+      }
+
+      function startLevel(n) {
+        level = n;
+        let L = LEVELS[level];
+        randomSeed(7 + level);
+
+        // facing: 1 = schaut nach rechts, -1 = nach links; anim zählt die Animationsbilder
+        player = { x: 40, y: 300, speed: 3, hp: 100, maxHp: 100, facing: 1, moving: false, anim: 0, cast: 0 };
+        zombies = []; trees = []; puddles = []; shots = [];
+        won = false; menuOpen = false; bannerTimer = 240;
+
+        // Im zweiten Level lernst du den Eiszauber
+        if (level >= 1 && !spells.includes(EIS)) spells.push(EIS);
+        // Im dritten Level kommt der Blitzzauber dazu
+        if (level >= 2 && !spells.includes(BLITZ)) spells.push(BLITZ);
+        // Im vierten Level kommt der Schwerkraftzauber dazu
+        if (level >= 3 && !spells.includes(SCHWERKRAFT)) spells.push(SCHWERKRAFT);
+        // Im fünften Level kommt die Beschwörung dazu
+        if (level >= 4 && !spells.includes(BESCHWOERUNG)) spells.push(BESCHWOERUNG);
+        bolts = []; vortices = []; allies = [];
+
+        // Dichte Pflanzen überall, nur nicht auf dem Weg und im Dorf
+        for (let i = 0; i < L.plants; i++) {
+          let x = random(WORLD);
+          let y = random(height);
+          if (x < VILLAGE_X - 10 && abs(y - pathY(x)) > PATH_W + 15) trees.push({ x: x, y: y, r: random(18, 34) });
+        }
+        trees.sort((a, b) => a.y - b.y);
+
+        // Pfützen (Moor), Treibsandflecken (Wüste) oder Lavabecken (Vulkan) am Wegrand
+        for (let i = 0; i < (L.pools || 60); i++) {
+          let x = random(WORLD);
+          puddles.push({ x: x, y: pathY(x) + random(-PATH_W, PATH_W), r: random(20, 45) });
+        }
+
+        // Gegner lauern auf dem Weg
+        // In Leveln mit Endboss bleibt vor dem Dorf Platz für ihn
+        let endX = L.boss ? VILLAGE_X - 400 : VILLAGE_X - 150;
+        if (L.count) {
+          // Feste Anzahl Gegner, gleichmäßig über den Weg verteilt
+          for (let i = 0; i < L.count; i++) spawnMob(L.mobs[i % L.mobs.length], 450 + (endX - 450) * (i + random(0.2, 0.8)) / L.count);
+        } else {
+          for (let x = 450; x < endX; x += random(L.spacing[0], L.spacing[1])) spawnMob(random(L.mobs), x);
+        }
+        if (L.boss) spawnMob(L.bossType || "boss", VILLAGE_X - 170);
+      }
+
+      function spawnMob(type, x) {
+        let off = MOBS[type].boss ? 0 : random(-40, 40);
+        zombies.push({
+          type: type, x: x, y: pathY(x) + off, hp: MOBS[type].hp, burn: 0, poison: 0, freeze: 0, awake: false,
+          // Für die Animation: Blickrichtung, läuft er, greift er an, Zähler und Zufallsversatz
+          facing: -1, moving: false, attacking: false, anim: 0, phase: random(100),
+          // Nur für den Boss: Feuerball-Wartezeit und Wurf-Animation
+          shotTimer: 80, casting: 0,
+        });
+      }
+
+      // Mitte des Weges an der Stelle x (schlängelt sich)
+      function pathY(x) {
+        return 300 + 110 * sin(x / 350) + 40 * sin(x / 130);
+      }
+
+      function draw() {
+        let L = LEVELS[level];
+        background(L.bg[0], L.bg[1], L.bg[2]);
+        camX = constrain(player.x - width / 2, 0, WORLD - width);
+
+        if (!menuOpen && !levelMenuOpen && player.hp > 0 && !won) update();
+
+        // Alles in der Welt wird um die Kamera verschoben
+        push();
+        translate(-camX, 0);
+        drawGround();
+        drawPuddles();
+        for (let z of zombies) drawMob(z);
+        drawBolts();
+        drawVortices();
+        for (let a of allies) drawWolf(a);
+        drawPlayer();
+        drawPlants();
+        pop();
+
+        drawHud();
+        if (menuOpen) drawMenu();
+
+        if (player.hp <= 0) endScreen("Du wurdest erwischt!", "red", "Klicken oder Enter: Level neu starten");
+        if (won) {
+          if (level < LEVELS.length - 1) endScreen("Level geschafft!", "lightgreen", "Klicken oder Enter: nächstes Level");
+          else endScreen("Alle Dörfer sind gerettet!", "lightgreen", "Klicken oder Enter: von vorne beginnen");
+        }
+        // Das Level-Menü liegt ganz oben
+        if (levelMenuOpen) drawLevelMenu();
+      }
+
+      // Position eines Level-Knopfes im Level-Menü
+      function levelRect(i) { return { x: 250, y: 150 + i * 70, w: 300, h: 56 }; }
+
+      function drawLevelMenu() {
+        fill(0, 200); rect(0, 0, width, height);
+        fill(30, 40, 70); rect(200, 90, 400, 130 + LEVELS.length * 70, 12);
+        fill(220, 230, 255); textAlign(CENTER); textSize(28);
+        text("Level wählen", width / 2, 135);
+        for (let i = 0; i < LEVELS.length; i++) {
+          let r = levelRect(i);
+          let hover = mouseX > r.x && mouseX < r.x + r.w && mouseY > r.y && mouseY < r.y + r.h;
+          // Das aktuelle Level ist hervorgehoben
+          fill(hover ? color(70, 90, 150) : color(50, 65, 110));
+          stroke(i == level ? color(255, 220, 100) : color(120, 140, 200)); strokeWeight(i == level ? 3 : 1);
+          rect(r.x, r.y, r.w, r.h, 8);
+          noStroke(); fill(255); textSize(20);
+          text((i + 1) + ": " + LEVELS[i].name, width / 2, r.y + 35);
+        }
+        fill(170, 185, 230); textSize(13);
+        text("Level anklicken oder T drücken zum Schließen", width / 2, 90 + 130 + LEVELS.length * 70 - 14);
+        textAlign(LEFT);
+      }
+
+      function update() {
+        // Magier laufen: WASD oder Pfeiltasten
+        let dx = 0, dy = 0;
+        if (keyIsDown(LEFT_ARROW) || keyIsDown(65)) dx -= 1;
+        if (keyIsDown(RIGHT_ARROW) || keyIsDown(68)) dx += 1;
+        if (keyIsDown(UP_ARROW) || keyIsDown(87)) dy -= 1;
+        if (keyIsDown(DOWN_ARROW) || keyIsDown(83)) dy += 1;
+        player.x += dx * player.speed;
+        player.y += dy * player.speed;
+        // Für die Animation merken: läuft der Magier, und wohin schaut er?
+        player.moving = dx != 0 || dy != 0;
+        if (dx != 0) player.facing = dx;
+        player.anim++;
+        if (player.cast > 0) player.cast--;
+        // Das Dorftor bleibt zu, solange noch Gegner leben
+        let maxX = zombies.length > 0 ? VILLAGE_X - 40 : WORLD;
+        player.x = constrain(player.x, 0, maxX);
+        // Die Pflanzen lassen dich nur auf dem Weg gehen
+        player.y = constrain(player.y, pathY(player.x) - PATH_W, pathY(player.x) + PATH_W);
+
+        // Gewonnen: alle Gegner tot und du bist im Dorf
+        if (zombies.length == 0 && player.x > VILLAGE_X + 60) won = true;
+        if (bannerTimer > 0) bannerTimer--;
+
+        for (let i = zombies.length - 1; i >= 0; i--) {
+          let z = zombies[i];
+          let m = MOBS[z.type];
+          let d = dist(z.x, z.y, player.x, player.y);
+          let reach = m.reach || 20; // Wie nah muss er sein, um zuzuschlagen
+
+          // Gegner lauert, bis du nah genug bist
+          if (d < m.wake) z.awake = true;
+
+          // Zauber wirken über Zeit (Feuer richtet bei feuerfesten Gegnern weniger an)
+          if (z.burn > 0) { z.burn--; z.hp -= 0.15 * (m.fireRes || 1); }
+          if (z.poison > 0) { z.poison--; z.hp -= 0.05 * (m.poisonRes || 1); }
+          if (z.freeze > 0) z.freeze--;
+
+          z.moving = false;
+          z.attacking = false;
+          if (z.awake && z.freeze <= 0) {
+            // Ziel: der Magier, oder ein Lichtwolf, der näher ist
+            let tgt = player, td = d;
+            for (let a of allies) {
+              let ad = dist(z.x, z.y, a.x, a.y);
+              if (ad < 180 && ad < td) { tgt = a; td = ad; }
+            }
+            z.facing = tgt.x >= z.x ? 1 : -1;
+            // Fernkämpfer (Feuerimp) bleiben auf Abstand stehen (keep)
+            if (td > (m.keep || 1)) {
+              z.moving = td >= reach;
+              z.anim += z.poison > 0 ? 0.5 : 1; // vergiftet = langsamere Animation
+              let speed = z.poison > 0 ? m.speed * 0.45 : m.speed;
+              z.x += ((tgt.x - z.x) / td) * speed;
+              z.y += ((tgt.y - z.y) / td) * speed;
+              z.y = constrain(z.y, pathY(z.x) - PATH_W, pathY(z.x) + PATH_W);
+            }
+            if (td < reach) {
+              if (tgt === player) player.hp -= m.dmg; else tgt.hp -= m.dmg * 1.5;
+              z.attacking = true;
+            }
+
+            // Starke Bosse rufen bei halbem Leben Verstärkung (summonAt)
+            if (m.summonAt && !z.summoned && z.hp < m.hp * m.summonAt) {
+              z.summoned = true;
+              for (let sx of [-70, 70]) { spawnMob("kaefer", z.x + sx); zombies[zombies.length - 1].awake = true; }
+            }
+
+            // Fernkämpfer (Boss, Feuerimp) werfen regelmäßig einen Feuerball auf den Magier
+            if (m.shootEvery) {
+              if (z.casting > 0) z.casting--;
+              z.shotTimer--;
+              if (z.shotTimer <= 0 && d > reach && d < (m.shotRange || 520)) {
+                // Fächer aus mehreren Geschossen (spread); in der zweiten Phase des Bosses mehr und schneller
+                let rage = m.rage && z.hp < m.hp * 0.5;
+                let n = (m.spread || 1) + (rage ? 2 : 0);
+                let base = atan2(player.y - 10 - (z.y - 20), player.x - z.x);
+                for (let k = 0; k < n; k++) {
+                  let a = base + (k - (n - 1) / 2) * 0.22;
+                  shots.push({
+                    x: z.x, y: z.y - 20, life: 240, dmg: m.shotDmg, col: m.shotColor,
+                    vx: cos(a) * m.shotSpeed, vy: sin(a) * m.shotSpeed,
+                  });
+                }
+                z.shotTimer = rage ? m.shootEvery * 0.65 : m.shootEvery;
+                z.casting = 20;
+              }
+            }
+          }
+
+          // Schwerkraft-Strudel ziehen Gegner zur Mitte und verletzen sie dort
+          for (let v of vortices) {
+            let vd = dist(z.x, z.y, v.x, v.y);
+            if (vd < 300 && vd > 4) {
+              let pull = (m.boss ? 0.8 : 2.6) * (1 - vd / 300 * 0.5); // der Boss lässt sich kaum ziehen
+              z.x += ((v.x - z.x) / vd) * pull;
+              z.y += ((v.y - z.y) / vd) * pull;
+              z.y = constrain(z.y, pathY(z.x) - PATH_W, pathY(z.x) + PATH_W);
+              z.awake = true;
+            }
+            if (vd < 45) z.hp -= 0.1; // im Zentrum zerquetscht es langsam
+          }
+
+          if (z.hp <= 0) zombies.splice(i, 1);
+        }
+        for (let i = vortices.length - 1; i >= 0; i--) { if (--vortices[i].life <= 0) vortices.splice(i, 1); }
+
+        // Lichtwölfe: laufen zum nächsten Gegner und beißen ihn, bis ihre Zeit oder ihr Leben abläuft
+        for (let i = allies.length - 1; i >= 0; i--) {
+          let a = allies[i];
+          a.life--; a.moving = false; a.attacking = false;
+          let target = null, best = 900;
+          for (let z of zombies) {
+            let zd = dist(a.x, a.y, z.x, z.y);
+            if (zd < best) { best = zd; target = z; }
+          }
+          // Ohne Gegner bleibt er in deiner Nähe
+          let tx = target ? target.x : player.x - player.facing * 40, ty = target ? target.y : player.y;
+          let td = dist(a.x, a.y, tx, ty);
+          if (td > (target ? 22 : 12)) {
+            a.x += ((tx - a.x) / td) * 2.4; a.y += ((ty - a.y) / td) * 2.4;
+            a.y = constrain(a.y, pathY(a.x) - PATH_W, pathY(a.x) + PATH_W);
+            a.moving = true; a.anim++;
+          }
+          a.facing = tx >= a.x ? 1 : -1;
+          if (target && td <= 30) { target.hp -= 0.3; target.awake = true; a.attacking = true; }
+          if (a.life <= 0 || a.hp <= 0) allies.splice(i, 1);
+        }
+
+        // Feuerbälle fliegen und treffen den Magier
+        for (let i = shots.length - 1; i >= 0; i--) {
+          let s = shots[i];
+          s.x += s.vx; s.y += s.vy; s.life--;
+          if (dist(s.x, s.y, player.x, player.y - 8) < 18) { player.hp -= s.dmg; s.life = 0; }
+          if (s.life <= 0) shots.splice(i, 1);
+        }
+        // Blitze verschwinden nach kurzer Zeit wieder
+        for (let i = bolts.length - 1; i >= 0; i--) { if (--bolts[i].life <= 0) bolts.splice(i, 1); }
+
+        // Lava verbrennt den Magier, wenn er hineinläuft
+        if (LEVELS[level].lava) {
+          for (let p of puddles) {
+            let nx = (player.x - p.x) / p.r, ny = (player.y - p.y) / (p.ry || p.r / 2);
+            if (nx * nx + ny * ny < 1) player.hp -= 0.25;
+          }
+        }
+      }
+
+      function drawGround() {
+        let L = LEVELS[level];
+        noStroke();
+        // Der Weg: ein Band aus Ellipsen entlang der Wegmitte
+        for (let x = camX - 20; x < camX + width + 20; x += 6) {
+          fill(L.pathOuter[0], L.pathOuter[1], L.pathOuter[2]);
+          ellipse(x, pathY(x), 30, PATH_W * 2 + 20);
+        }
+        for (let x = camX - 20; x < camX + width + 20; x += 6) {
+          fill(L.pathInner[0], L.pathInner[1], L.pathInner[2]);
+          ellipse(x, pathY(x), 20, PATH_W * 2 - 10);
+        }
+        drawVillage();
+      }
+
+      function drawVillage() {
+        let L = LEVELS[level];
+        // Lichtung, damit das Dorf nicht in der Wildnis steht
+        fill(L.villageGround[0], L.villageGround[1], L.villageGround[2]);
+        rect(VILLAGE_X, 0, WORLD - VILLAGE_X, height);
+        fill(L.pathInner[0], L.pathInner[1], L.pathInner[2]);
+        rect(VILLAGE_X, pathY(VILLAGE_X) - PATH_W, WORLD - VILLAGE_X, PATH_W * 2);
+
+        // Häuser oben und unten am Dorfweg
+        let xs = [VILLAGE_X + 70, VILLAGE_X + 200];
+        for (let i = 0; i < xs.length; i++) {
+          for (let oben of [true, false]) {
+            let hx = xs[i] + (oben ? 0 : 50);
+            let hy = oben ? 40 + i * 20 : height - 130 - i * 20;
+            fill(L.wall[0], L.wall[1], L.wall[2]); rect(hx, hy, 90, 70);          // Wand
+            fill(L.roof[0], L.roof[1], L.roof[2]);
+            if (L.flatRoof) rect(hx - 5, hy - 10, 100, 12);                       // Flachdach
+            else triangle(hx - 8, hy, hx + 98, hy, hx + 45, hy - 40);             // Spitzdach
+            fill(250, 220, 100); rect(hx + 12, hy + 15, 18, 18);                  // Fenster
+            fill(70, 40, 20); rect(hx + 55, hy + 30, 20, 40);                     // Tür
+          }
+        }
+
+        // Dorftor: zu, solange Gegner leben
+        let gy = pathY(VILLAGE_X);
+        fill(zombies.length > 0 ? color(110, 30, 30) : color(60, 150, 60));
+        rect(VILLAGE_X - 8, gy - PATH_W, 8, PATH_W * 2);
+        fill(zombies.length > 0 ? 255 : 30); textAlign(CENTER); textSize(14);
+        text(zombies.length > 0 ? "Tor verschlossen" : "Tor offen", VILLAGE_X - 4, gy - PATH_W - 8);
+        textAlign(LEFT);
+      }
+
+      function drawPuddles() {
+        let c = LEVELS[level].puddle;
+        noStroke();
+        for (let p of puddles) {
+          let ry = p.ry || p.r / 2;
+          fill(c[0], c[1], c[2]); ellipse(p.x, p.y, p.r * 2, ry * 2);
+          // Lavabecken glühen und blubbern
+          if (LEVELS[level].lava) {
+            fill(255, 200, 40, 160); ellipse(p.x, p.y, p.r * 1.2, p.r * 0.5);
+            let k = (frameCount * 0.03 + p.x) % 1;
+            fill(255, 230, 120, 200 - k * 200); circle(p.x + sin(p.x) * p.r * 0.4, p.y - k * 10, 4);
+          }
+        }
+        // Feuerbälle des Bosses
+        for (let s of shots) {
+          let k = s.dmg / 12; // kleinere Feuerbälle machen weniger Schaden
+          if (s.col) {
+            // Kristallsplitter: leuchtende Raute
+            let a = atan2(s.vy, s.vx);
+            push(); translate(s.x, s.y); rotate(a);
+            fill(s.col[0], s.col[1], s.col[2], 90); circle(0, 0, 28);
+            fill(s.col[0], s.col[1], s.col[2]); quad(-10, 0, 0, -5, 12, 0, 0, 5);
+            fill(255, 255, 255, 220); quad(-4, 0, 0, -2, 6, 0, 0, 2);
+            pop();
+          } else {
+            fill(255, 80, 0, 120); circle(s.x, s.y, 26 * k);
+            fill(255, 170, 20); circle(s.x, s.y, 16 * k);
+            fill(255, 240, 160); circle(s.x, s.y, 7 * k);
+          }
+        }
+      }
+
+      // Bäume im Moor, Kakteen in der Wüste
+      function drawPlants() {
+        noStroke();
+        for (let t of trees) {
+          // Nur was im Bild ist zeichnen
+          if (t.x < camX - 40 || t.x > camX + width + 40) continue;
+          if (LEVELS[level].decor == "baum") {
+            fill(35, 22, 12); rect(t.x - 5, t.y, 10, t.r + 10);
+            fill(8, 40, 18); circle(t.x, t.y, t.r * 2);
+            fill(14, 58, 26); circle(t.x - 4, t.y - 5, t.r * 1.2);
+          } else if (LEVELS[level].decor == "kristall") {
+            // Leuchtende Kristallgruppe: mehrere Spitzen in Blau, Violett und Türkis
+            let hue = [[90, 200, 255], [170, 120, 255], [90, 240, 210]][floor(t.x) % 3];
+            let pulse = 0.8 + 0.2 * sin(frameCount * 0.04 + t.x);
+            fill(hue[0], hue[1], hue[2], 40 * pulse); ellipse(t.x, t.y, t.r * 3, t.r * 1.4);
+            for (let k = -1; k <= 1; k++) {
+              let h = t.r * (1.6 - abs(k) * 0.5), w = t.r * 0.28;
+              let bx = t.x + k * t.r * 0.45;
+              fill(hue[0] * 0.55, hue[1] * 0.55, hue[2] * 0.55); triangle(bx - w, t.y + 4, bx + w, t.y + 4, bx, t.y - h);
+              fill(hue[0], hue[1], hue[2], 210 * pulse); triangle(bx - w * 0.2, t.y + 4, bx + w, t.y + 4, bx, t.y - h);
+            }
+          } else if (LEVELS[level].decor == "friedhof") {
+            if (t.r < 26) {
+              // Grabstein mit Kreuz und Moos
+              let h = t.r * 1.3;
+              fill(95, 95, 110); rect(t.x - 10, t.y - h, 20, h, 9, 9, 0, 0);
+              fill(120, 120, 135); rect(t.x - 10, t.y - h, 7, h, 9, 0, 0, 0);
+              fill(55, 55, 70); rect(t.x - 1.5, t.y - h + 5, 3, 13); rect(t.x - 5, t.y - h + 9, 10, 3);
+              fill(60, 95, 60, 200); ellipse(t.x + 4, t.y - 1, 12, 5);
+            } else {
+              // Kahler toter Baum mit verdrehten Ästen
+              stroke(38, 30, 36); strokeWeight(5);
+              line(t.x, t.y + t.r, t.x + 2, t.y - t.r * 1.4);
+              strokeWeight(3);
+              line(t.x + 1, t.y - t.r * 0.4, t.x - t.r * 0.9, t.y - t.r * 1.2);
+              line(t.x + 2, t.y - t.r * 0.9, t.x + t.r * 0.9, t.y - t.r * 1.7);
+              strokeWeight(2);
+              line(t.x - t.r * 0.9, t.y - t.r * 1.2, t.x - t.r * 1.2, t.y - t.r * 1.9);
+              line(t.x + t.r * 0.9, t.y - t.r * 1.7, t.x + t.r * 0.6, t.y - t.r * 2.2);
+              noStroke();
+            }
+          } else if (LEVELS[level].decor == "vulkan") {
+            // Schwarze Lavafelsen mit glühender Spitze
+            let h = t.r * 2;
+            fill(28, 22, 24); triangle(t.x - t.r, t.y + 10, t.x + t.r, t.y + 10, t.x, t.y - h);
+            fill(50, 40, 42); triangle(t.x - t.r * 0.3, t.y + 10, t.x + t.r, t.y + 10, t.x, t.y - h);
+            fill(255, 120 + 60 * sin(frameCount * 0.05 + t.x), 20); triangle(t.x - 4, t.y - h + 10, t.x + 4, t.y - h + 10, t.x, t.y - h);
+          } else {
+            let h = t.r * 2.2;
+            fill(40, 120, 50);
+            rect(t.x - 5, t.y - h / 2, 10, h, 5);                        // Stamm
+            rect(t.x - 16, t.y - h / 4, 11, 7, 3); rect(t.x - 16, t.y - h / 4 - 14, 7, 18, 3); // linker Arm
+            rect(t.x + 5, t.y, 11, 7, 3); rect(t.x + 9, t.y - 14, 7, 18, 3);                   // rechter Arm
+            fill(70, 160, 80); rect(t.x - 2, t.y - h / 2 + 2, 3, h - 4, 2);
+          }
+        }
+      }
+
+      function drawPlayer() {
+        noStroke();
+        let t = player.anim;
+        // Beim Laufen hüpft der Magier und die Beine schwingen, im Stand atmet er leicht
+        let bob = player.moving ? abs(sin(t * 0.3)) * -4 : sin(t * 0.08) * 1.2;
+        let step = player.moving ? sin(t * 0.3) * 6 : 0;
+        let sway = player.moving ? sin(t * 0.3) * 3 : sin(t * 0.06) * 1.5;
+
+        push();
+        translate(player.x, player.y);
+        scale(player.facing, 1); // spiegelt die Figur, wenn sie nach links schaut
+
+        // Schatten
+        fill(0, 70); ellipse(0, 18, 30, 8);
+
+        // Umhang weht hinten
+        fill(40, 40, 140);
+        triangle(-6, -8 + bob, -18 - sway, 16, 4, 14);
+
+        // Beine mit Schuhen
+        fill(70, 45, 25);
+        ellipse(-5 + step, 16, 9, 6);
+        ellipse(5 - step, 16, 9, 6);
+
+        // Robe (leicht wellig am Saum)
+        fill(60, 70, 210);
+        quad(-8, -8 + bob, 8, -8 + bob, 13 + sway * 0.3, 14, -13 + sway * 0.3, 14);
+        fill(230, 200, 90); rect(-8, 0 + bob, 16, 3); // Gürtel
+
+        // Zauberstab in der Hand (beim Zaubern nach vorne gestreckt)
+        let armUp = player.cast > 0 ? -1.0 : 0;
+        push();
+        translate(8, -2 + bob);
+        rotate(armUp - 0.15 + sway * 0.02);
+        stroke(110, 70, 30); strokeWeight(3); line(0, 6, 2, -22);
+        noStroke();
+        // Kugel an der Stabspitze: Farbe des gewählten Zaubers, beim Zaubern größer
+        let glow = player.cast > 0 ? 8 + player.cast * 0.8 : 0;
+        if (selectedSpell) {
+          let c = color(selectedSpell.color); c.setAlpha(90);
+          fill(c); circle(2, -24, 10 + glow + sin(t * 0.15) * 2);
+          fill(selectedSpell.color); circle(2, -24, 7);
+        } else { fill(200); circle(2, -24, 6); }
+        pop();
+
+        // Kopf mit Bart und Augen
+        fill(240, 200, 160); circle(0, -13 + bob, 12);
+        fill(235); triangle(-5, -11 + bob, 5, -11 + bob, 0, -3 + bob); // Bart
+        fill(30); circle(3, -14 + bob, 2);                              // Auge
+
+        // Spitzer Hut mit Krempe und Band
+        fill(40, 40, 160);
+        ellipse(0, -18 + bob, 24, 6);
+        triangle(-8, -18 + bob, 8, -18 + bob, 3 + sway * 0.5, -38 + bob);
+        fill(230, 200, 90); rect(-8, -21 + bob, 16, 3);
+        pop();
+
+        // Kleine Lebensleiste über dem Kopf
+        fill(60); rect(player.x - 18, player.y - 52, 36, 5);
+        fill("limegreen"); rect(player.x - 18, player.y - 52, 36 * max(player.hp, 0) / player.maxHp, 5);
+      }
+
+      // Blitze des Blitzzaubers: Zickzacklinie vom Himmel bis zum Gegner
+      function drawBolts() {
+        for (let b of bolts) {
+          let x = b.x, y = -10;
+          let steps = 7;
+          for (let layer of [[255, 240, 120, 6], [255, 255, 255, 2]]) {
+            stroke(layer[0], layer[1], layer[2], 255 * b.life / 14); strokeWeight(layer[3]);
+            let px = x, py = y;
+            for (let i = 1; i <= steps; i++) {
+              let nx = i == steps ? b.x : b.x + sin(b.seed + i * 2.3) * 14;
+              let ny = y + (b.y - y) * i / steps;
+              line(px, py, nx, ny);
+              px = nx; py = ny;
+            }
+          }
+          noStroke();
+          fill(255, 255, 200, 140 * b.life / 14); circle(b.x, b.y, 50 * (1 - b.life / 28));
+        }
+      }
+
+      // Farbe eines Körperteils: der Zustand (Zauber) färbt den ganzen Gegner ein
+      // eingefroren = blau, brennt = orange, vergiftet = hellgrün
+      function mobColor(z, base) {
+        if (z.freeze > 0) return color(140, 210, 255);
+        if (z.burn > 0) return color(230, 100, 30);
+        if (z.poison > 0) return color(120, 220, 90);
+        return base;
+      }
+
+      function drawMob(z) {
+        noStroke();
+        let m = MOBS[z.type];
+
+        push();
+        translate(z.x, z.y);
+        scale(z.facing, 1); // spiegelt den Gegner, wenn er nach links schaut
+        fill(0, 70); ellipse(0, 14, m.size + 4, 7); // Schatten
+        if (z.type == "zombie") drawZombieBody(z);
+        else if (z.type == "boss") drawGolemBody(z);
+        else if (z.type == "schleim") drawSlimeBody(z);
+        else if (z.type == "kaefer") drawBeetleBody(z);
+        else if (z.type == "kristallkoenig") drawCrystalKingBody(z);
+        else if (z.type == "skelett") drawSkeletonBody(z);
+        else if (z.type == "geist") drawGhostBody(z);
+        else if (z.type == "imp") drawImpBody(z);
+        else {
+          // Der Skorpion ist mit dem Kopf nach links gezeichnet, deshalb einmal zusätzlich spiegeln
+          push(); scale(-1, 1); drawScorpionBody(z); pop();
+        }
+
+        // Zustandseffekte (beim großen Boss entsprechend größer)
+        if (m.boss) scale(1.8);
+        let f = frameCount;
+        if (z.burn > 0) {
+          // Flammen steigen auf
+          for (let i = 0; i < 4; i++) {
+            let k = (f * 0.1 + i * 0.25) % 1;
+            fill(255, 180 - k * 120, 20, 255 - k * 255);
+            circle(-8 + i * 5, -4 - k * 22, 8 - k * 5);
+          }
+        }
+        if (z.poison > 0) {
+          // Giftblasen
+          for (let i = 0; i < 3; i++) {
+            let k = (f * 0.03 + i * 0.33) % 1;
+            fill(80, 230, 80, 220 - k * 220);
+            circle(-6 + i * 6, -8 - k * 20, 5);
+          }
+        }
+        if (z.freeze > 0) {
+          // Eiskristalle
+          fill(200, 240, 255, 170);
+          triangle(-12, 12, -6, 12, -9, -6);
+          triangle(6, 12, 12, 12, 9, -10);
+          triangle(-3, 12, 3, 12, 0, -14);
+        }
+        pop();
+
+        // Lebensbalken (nicht gespiegelt)
+        let by = m.boss ? z.y - 70 : z.y - 30;
+        fill(60); rect(z.x - 15, by, 30, 4);
+        fill("red"); rect(z.x - 15, by, 30 * max(z.hp, 0) / m.hp, 4);
+      }
+
+      // Strudel des Schwerkraftzaubers: drehende Spiralarme um ein dunkles Zentrum
+      function drawVortices() {
+        for (let v of vortices) {
+          let k = min(1, v.life / 30, (150 - v.life) / 15); // blendet am Anfang und Ende ein bzw. aus
+          push(); translate(v.x, v.y);
+          noStroke();
+          fill(60, 20, 110, 70 * k); circle(0, 0, 300);
+          for (let arm = 0; arm < 3; arm++) {
+            for (let i = 0; i < 24; i++) {
+              let a = arm * TWO_PI / 3 + i * 0.28 - frameCount * 0.12;
+              let r = 10 + i * 6;
+              fill(170, 120, 255, (230 - i * 8) * k);
+              circle(cos(a) * r, sin(a) * r * 0.6, 7 - i * 0.2);
+            }
+          }
+          fill(0, 255 * k); circle(0, 0, 26);
+          fill(200, 160, 255, 200 * k); circle(0, 0, 8 + sin(frameCount * 0.3) * 2);
+          pop();
+        }
+      }
+
+      // Skelett: klappernde Knochen mit Rippen und Schädel
+      function drawSkeletonBody(z) {
+        let awake = z.awake && z.freeze <= 0;
+        let t = z.anim;
+        let step = z.moving ? sin(t * 0.22) * 5 : 0;
+        let bob = z.moving ? abs(sin(t * 0.22)) * -2 : sin(frameCount * 0.05 + z.phase) * 0.8;
+        let bone = mobColor(z, color(225, 220, 200));
+        let shade = mobColor(z, color(150, 145, 130));
+        let armA = awake ? -HALF_PI + (z.attacking ? sin(frameCount * 0.5) * 0.6 : sin(t * 0.22) * 0.15) : 0.3;
+
+        // Beine (dünne Knochen) und Füße
+        stroke(bone); strokeWeight(3);
+        line(-3, 4, -3 + step, 14); line(3, 4, 3 - step, 14);
+        noStroke(); fill(bone); ellipse(-3 + step, 15, 8, 3); ellipse(3 - step, 15, 8, 3);
+        // Wirbelsäule und Becken
+        stroke(bone); strokeWeight(3); line(0, -12 + bob, 0, 4); noStroke();
+        fill(bone); ellipse(0, 4, 12, 5);
+        // Rippen
+        stroke(bone); strokeWeight(2);
+        for (let i = 0; i < 3; i++) line(-6, -9 + i * 4 + bob, 6, -9 + i * 4 + bob);
+        noStroke();
+
+        // Hinterer Arm
+        push(); translate(0, -10 + bob); rotate(armA - 0.2);
+        stroke(shade); strokeWeight(3); line(0, 0, 0, 14); noStroke(); pop();
+        // Schädel
+        fill(bone); circle(1, -18 + bob, 14);
+        rect(-3, -14 + bob, 9, 5, 2);   // Kiefer
+        fill(awake ? color(255, 60, 40) : color(25));
+        circle(-1, -19 + bob, 4); circle(5, -19 + bob, 4);
+        fill(40); rect(-1, -13 + bob, 1, 3); rect(2, -13 + bob, 1, 3); rect(5, -13 + bob, 1, 3);
+        // Vorderer Arm
+        push(); translate(1, -10 + bob); rotate(armA);
+        stroke(bone); strokeWeight(3); line(0, 0, 0, 14); noStroke();
+        fill(bone); circle(0, 15, 5);
+        pop();
+      }
+
+      // Geist: durchscheinendes Laken, das schwebt, flackert und wabert
+      function drawGhostBody(z) {
+        let awake = z.awake && z.freeze <= 0;
+        let hover = sin(frameCount * 0.07 + z.phase) * 4 - 8;
+        let alpha = awake ? 170 + sin(frameCount * 0.2 + z.phase) * 50 : 110;  // schlafend blasser, wach flackernd
+        let base = mobColor(z, color(200, 225, 255));
+        let c = color(base); c.setAlpha(alpha);
+        let edge = color(base); edge.setAlpha(alpha * 0.6);
+
+        // Wabernder Saum: mehrere Zipfel, die sich bewegen
+        fill(edge);
+        for (let i = -2; i <= 2; i++) {
+          let w = sin(frameCount * 0.1 + i * 1.3 + z.phase) * 3;
+          triangle(i * 5 - 3 + w, hover + 6, i * 5 + 3 + w, hover + 6, i * 5 + w * 1.5, hover + 18 + abs(i) * -1.5);
+        }
+        // Körper: Kopf und Laken
+        fill(c); circle(0, hover - 6, 22);
+        rect(-11, hover - 6, 22, 14);
+        // Arme: wach nach vorne gestreckt
+        if (awake) { ellipse(11, hover - 1, 12, 5 + (z.attacking ? sin(frameCount * 0.5) * 2 : 0)); }
+        // Augen und Mund: hohle schwarze Löcher
+        fill(20, 20, 40, 230);
+        ellipse(-4, hover - 8, 4, awake ? 6 : 2); ellipse(4, hover - 8, 4, awake ? 6 : 2);
+        ellipse(0, hover - 1, 5, awake ? 7 + (z.attacking ? 3 : 0) : 2);
+      }
+
+      // Kristallkäfer: gepanzerter Käfer mit Kristallen auf dem Rücken
+      function drawBeetleBody(z) {
+        let awake = z.awake && z.freeze <= 0;
+        let wig = z.moving ? sin(z.anim * 0.4) : 0;
+        let shell = mobColor(z, color(60, 80, 150));
+        let dark = mobColor(z, color(35, 45, 95));
+        // Sechs Beine
+        stroke(dark); strokeWeight(2);
+        for (let i = 0; i < 3; i++) {
+          let ph = (i % 2 == 0 ? wig : -wig) * 3, lx = -7 + i * 7;
+          line(lx, 4, lx + ph, 12); line(lx, -4, lx - ph, -12);
+        }
+        noStroke();
+        // Panzer
+        fill(shell); ellipse(0, 0, 32, 20);
+        fill(dark); rect(-1, -9, 2, 18);
+        // Leuchtende Kristalle auf dem Rücken
+        let pulse = 150 + 80 * sin(frameCount * 0.08 + z.phase);
+        fill(120, 220, 255, pulse);
+        triangle(-9, -2, -5, -2, -7, -11); triangle(4, -2, 9, -2, 6.5, -12);
+        // Kopf mit Zangen
+        fill(dark); circle(16, 0, 11);
+        let open = z.attacking ? 0.5 + abs(sin(frameCount * 0.5)) * 0.4 : 0.15;
+        stroke(dark); strokeWeight(2.5);
+        line(20, -2, 26, -2 - open * 8); line(20, 2, 26, 2 + open * 8);
+        noStroke();
+        fill(awake ? color(255, 60, 60) : color(20)); circle(17, -2.5, 3); circle(17, 2.5, 3);
+      }
+
+      // Lichtwolf: leuchtender Verbündeter des Magiers
+      function drawWolf(a) {
+        let step = a.moving ? sin(a.anim * 0.45) * 5 : 0;
+        let bob = a.moving ? abs(sin(a.anim * 0.45)) * -2 : sin(frameCount * 0.08 + a.phase);
+        let fade = min(1, a.life / 40);
+        push(); translate(a.x, a.y); scale(a.facing, 1);
+        noStroke();
+        // Aura
+        fill(80, 255, 255, 50 * fade); ellipse(0, 0, 60, 36);
+        // Schwanz
+        fill(120, 240, 255, 200 * fade); triangle(-14, -2 + bob, -14, 3 + bob, -26, -8 + bob + step * 0.3);
+        // Beine
+        fill(90, 220, 255, 230 * fade);
+        rect(-10 + step, 4, 4, 9, 2); rect(-4 - step, 4, 4, 9, 2); rect(6 + step, 4, 4, 9, 2); rect(11 - step, 4, 4, 9, 2);
+        // Körper und Kopf
+        fill(150, 245, 255, 230 * fade); ellipse(0, bob, 32, 16);
+        ellipse(15, -5 + bob, 14, 12);
+        triangle(11, -9 + bob, 14, -9 + bob, 12, -16 + bob); triangle(16, -9 + bob, 19, -9 + bob, 19, -16 + bob);
+        fill(255, 255, 255, 240 * fade); triangle(20, -4 + bob, 20, -1 + bob, 25, -2 + bob);
+        fill(0, 80, 140); circle(16, -6 + bob, 2.5);
+        // Funken
+        fill(255, 255, 255, 200 * fade);
+        for (let i = 0; i < 3; i++) circle(-6 + i * 8, -10 - ((frameCount * 0.6 + i * 9) % 18), 2.5);
+        // Beschwörungswolke
+        if (a.puff > 0) { a.puff--; fill(120, 255, 255, a.puff * 10); circle(0, 0, 70 - a.puff * 2); }
+        // Beißen
+        if (a.attacking) { fill(255, 255, 255, 180); circle(26, -2, 6 + abs(sin(frameCount * 0.6)) * 6); }
+        pop();
+      }
+
+      // Kristallkönig: Thron-großer Kristallgolem mit Krone, Kristallarmen und leuchtendem Kern
+      function drawCrystalKingBody(z) {
+        let awake = z.awake && z.freeze <= 0;
+        let rage = z.hp < MOBS[z.type].hp * 0.5;
+        let stomp = z.moving ? abs(sin(z.anim * 0.08)) * -3 : sin(frameCount * 0.04) * 1.5;
+        let step = z.moving ? sin(z.anim * 0.08) * 5 : 0;
+        let armUp = z.casting > 0 ? -1.3 : z.attacking ? sin(frameCount * 0.4) * 0.7 : sin(z.anim * 0.08) * 0.15;
+        let body = mobColor(z, rage ? color(150, 90, 220) : color(70, 130, 210));
+        let light = mobColor(z, rage ? color(200, 150, 255) : color(130, 200, 255));
+        let core = z.freeze > 0 ? color(255) : (rage ? color(255, 120, 200) : color(180, 255, 255));
+        let pulse = 0.6 + 0.4 * sin(frameCount * (rage ? 0.25 : 0.1));
+
+        // Beine
+        fill(body); rect(-14 + step, 6, 11, 14, 3); rect(3 - step, 6, 11, 14, 3);
+        // Hinterer Arm mit Kristallspitze
+        push(); translate(-14, -14 + stomp); rotate(armUp * 0.8 + 0.3);
+        fill(body); rect(-5, 0, 10, 20, 3); fill(light); triangle(-6, 20, 6, 20, 0, 34); pop();
+        // Körper
+        fill(body); ellipse(0, -6 + stomp, 42, 38);
+        fill(light); triangle(-14, -14 + stomp, -4, -14 + stomp, -9, -28 + stomp); // Schulterkristalle
+        triangle(4, -14 + stomp, 14, -14 + stomp, 9, -28 + stomp);
+        // Leuchtender Kern
+        fill(red(core), green(core), blue(core), 90 * pulse + 40); circle(0, -6 + stomp, 22);
+        fill(core); circle(0, -6 + stomp, 11 * (0.8 + 0.2 * pulse));
+        // Kopf mit Krone
+        fill(body); rect(-9, -35 + stomp, 20, 16, 4);
+        fill(awake ? core : color(40, 60, 100)); rect(-5, -30 + stomp, 5, 4); rect(3, -30 + stomp, 5, 4);
+        fill(255, 220, 90);
+        for (let i = -1; i <= 1; i++) triangle(i * 6 - 3, -35 + stomp, i * 6 + 3, -35 + stomp, i * 6, -45 + stomp - (i == 0 ? 3 : 0));
+        // Vorderer Arm
+        push(); translate(15, -14 + stomp); rotate(armUp);
+        fill(body); rect(-5, 0, 10, 20, 3); fill(light); triangle(-6, 20, 6, 20, 0, 36); pop();
+        // Wut: Funken um den Körper
+        if (rage) { fill(255, 150, 255, 200); for (let i = 0; i < 4; i++) circle(cos(frameCount * 0.1 + i * 1.6) * 28, -8 + sin(frameCount * 0.13 + i * 1.6) * 26, 3); }
+      }
+
+      // Lavaschleim: glühender Klumpen, der beim Gehen hüpft und sich zusammenquetscht
+      function drawSlimeBody(z) {
+        let awake = z.awake && z.freeze <= 0;
+        let hop = z.moving ? abs(sin(z.anim * 0.1)) : 0;
+        // Beim Absprung gestreckt, bei der Landung platt; schlafend wabbelt er
+        let sq = z.moving ? 1 + (0.5 - hop) * 0.35 : 1 + sin(frameCount * 0.06 + z.phase) * 0.05;
+        let w = 30 * sq, h = 24 / sq;
+        let lift = -hop * 9;
+        let c = mobColor(z, color(220, 80, 25));
+        let dark = mobColor(z, color(150, 40, 15));
+
+        fill(dark); ellipse(0, 8 + lift, w + 4, h * 0.5);                // Untere Pfütze
+        fill(c); ellipse(0, 0 + lift, w, h);                              // Körper
+        fill(mobColor(z, color(255, 170, 60))); ellipse(-5, -5 + lift, w * 0.35, h * 0.3); // Glanz
+        // Blubbernde Blasen im Körper
+        let k = (frameCount * 0.03 + z.phase) % 1;
+        fill(255, 220, 100, 200 - k * 200); circle(4, 4 + lift - k * 10, 5);
+        // Augen
+        fill(awake ? color(255, 255, 120) : color(40));
+        circle(-4, -2 + lift, 5); circle(5, -2 + lift, 5);
+        fill(20); circle(-3, -2 + lift, 2); circle(6, -2 + lift, 2);
+        // Wütender Mund beim Angriff
+        if (z.attacking) { fill(60, 10, 5); ellipse(1, 5 + lift, 10, 4 + abs(sin(frameCount * 0.5)) * 3); }
+      }
+
+      // Feuerimp: kleiner fliegender Teufel, der Feuerbälle wirft
+      function drawImpBody(z) {
+        let awake = z.awake && z.freeze <= 0;
+        // Schwebt auf und ab, die Flügel schlagen schnell
+        let hover = sin(frameCount * 0.12 + z.phase) * 3 - 8;
+        let flap = awake ? sin(frameCount * 0.5) : sin(frameCount * 0.1) * 0.3;
+        let c = mobColor(z, color(200, 40, 40));
+        let dark = mobColor(z, color(110, 20, 30));
+
+        // Schatten bleibt unten, der Imp schwebt
+        // Flügel
+        fill(dark);
+        push(); translate(-3, -4 + hover); rotate(-0.5 - flap * 0.6);
+        triangle(0, 0, -16, -8, -6, 6); pop();
+        push(); translate(3, -4 + hover); rotate(0.5 + flap * 0.6);
+        triangle(0, 0, 16, -8, 6, 6); pop();
+        // Schwanz mit Spitze
+        stroke(c); strokeWeight(2); noFill();
+        arc(-10, 4 + hover, 14, 14, 0.3, PI * 1.2);
+        noStroke(); fill(dark); triangle(-18, 8 + hover, -14, 12 + hover, -20, 13 + hover);
+        // Körper und Kopf
+        fill(c); ellipse(0, 2 + hover, 14, 16);
+        circle(0, -9 + hover, 14);
+        // Hörner
+        fill(dark);
+        triangle(-6, -13 + hover, -3, -13 + hover, -7, -20 + hover);
+        triangle(6, -13 + hover, 3, -13 + hover, 7, -20 + hover);
+        // Augen und Grinsen
+        fill(awake ? color(255, 240, 80) : color(30));
+        circle(-3, -10 + hover, 3.5); circle(3, -10 + hover, 3.5);
+        stroke(30, 0, 0); strokeWeight(1.2); noFill();
+        arc(0, -6 + hover, 7, 5, 0.1, PI - 0.1);
+        noStroke();
+        // Beim Werfen leuchtet ein kleiner Feuerball in der Hand
+        if (z.casting > 0) { fill(255, 160, 20); circle(10, -2 + hover, 6 + z.casting * 0.3); }
+      }
+
+      // Der Lavagolem: Felsenkörper mit glühenden Rissen und Lavafäusten
+      function drawGolemBody(z) {
+        let t = z.anim;
+        let awake = z.awake && z.freeze <= 0;
+        // Beim Gehen stampft er, schlafend atmet er langsam
+        let stomp = z.moving ? abs(sin(t * 0.09)) * -3 : sin(frameCount * 0.04) * 1.5;
+        let step = z.moving ? sin(t * 0.09) * 5 : 0;
+        let glowPulse = 180 + sin(frameCount * 0.1 + z.phase) * 60;
+        // Beim Schuss hebt er die Arme, beim Nahangriff schlägt er
+        let armUp = z.casting > 0 ? -1.2 : z.attacking ? sin(frameCount * 0.4) * 0.7 : sin(t * 0.09) * 0.2;
+        let rock = mobColor(z, color(70, 55, 55));
+        let rockLight = mobColor(z, color(100, 80, 75));
+        let lava = z.freeze > 0 ? color(140, 210, 255) : color(255, glowPulse * 0.55, 20);
+
+        // Beine
+        fill(rock);
+        rect(-14 + step, 6, 11, 14, 3);
+        rect(3 - step, 6, 11, 14, 3);
+
+        // Hinterer Arm
+        push(); translate(-12, -14 + stomp); rotate(armUp * 0.8 + 0.3);
+        fill(rock); rect(-5, 0, 10, 22, 3);
+        fill(lava); circle(0, 24, 12);
+        pop();
+
+        // Körper
+        fill(rock); ellipse(0, -6 + stomp, 40, 36);
+        fill(rockLight); ellipse(-6, -10 + stomp, 18, 14);
+        // Glühende Lavarisse
+        stroke(lava); strokeWeight(2.5); noFill();
+        line(-10, -4 + stomp, -2, 2 + stomp); line(-2, 2 + stomp, 4, -6 + stomp);
+        line(4, -6 + stomp, 12, -2 + stomp); line(-4, 2 + stomp, -6, 10 + stomp);
+        noStroke();
+
+        // Kopf
+        fill(rock); rect(-9, -34 + stomp, 20, 16, 4);
+        // Augen und Mund glühen: schlafend nur schwach
+        fill(awake ? lava : color(90, 40, 20));
+        rect(-5, -29 + stomp, 5, 4); rect(3, -29 + stomp, 5, 4);
+        rect(-4, -22 + stomp, 10, 2);
+        // Hörner aus Fels
+        fill(rockLight);
+        triangle(-9, -34 + stomp, -5, -34 + stomp, -10, -42 + stomp);
+        triangle(11, -34 + stomp, 7, -34 + stomp, 12, -42 + stomp);
+
+        // Vorderer Arm mit Lavafaust
+        push(); translate(14, -14 + stomp); rotate(armUp);
+        fill(rock); rect(-5, 0, 10, 22, 3);
+        fill(lava); circle(0, 25, 15);
+        pop();
+      }
+
+      function drawZombieBody(z) {
+        let t = z.anim;
+        let awake = z.awake && z.freeze <= 0;
+        // Beim Laufen schlurft er, schlafend wankt er nur leicht
+        let step = z.moving ? sin(t * 0.18) * 5 : 0;
+        let bob = z.moving ? abs(sin(t * 0.18)) * -2 : sin(frameCount * 0.05 + z.phase) * 1;
+        let lean = z.awake ? 2 : 0;                    // wach: nach vorne gebeugt
+        let armSwing = z.attacking ? sin(frameCount * 0.5) * 0.5 : sin(t * 0.18) * 0.1;
+        let armAngle = awake ? -HALF_PI + armSwing : 0.4; // wach: Arme nach vorne gestreckt, schlafend: hängen
+
+        // Beine
+        fill(mobColor(z, color(60, 60, 90)));
+        rect(-6 + step, 4, 5, 10, 2);
+        rect(1 - step, 4, 5, 10, 2);
+
+        // Hinterer Arm
+        push(); translate(0, -6 + bob); rotate(armAngle - 0.2);
+        fill(mobColor(z, color(80, 115, 80))); rect(-2, 0, 5, 14, 2);
+        pop();
+
+        // Körper mit zerrissenem Hemd
+        fill(mobColor(z, color(110, 90, 60)));
+        rect(-7 + lean * 0.5, -8 + bob, 14, 15, 2);
+        fill(mobColor(z, color(70, 55, 35)));
+        triangle(-7, 7 + bob, -3, 7 + bob, -5, 11 + bob);   // Fetzen
+        triangle(1, 7 + bob, 6, 7 + bob, 4, 12 + bob);
+
+        // Kopf (schlafend nach unten geneigt)
+        let hy = -15 + bob + (awake ? 0 : 2);
+        fill(mobColor(z, color(110, 160, 100)));
+        circle(2 + lean, hy, 14);
+        // Augen: schlafend dunkel, wach rot leuchtend
+        fill(awake ? color(255, 30, 30) : color(20));
+        circle(5 + lean, hy - 1, awake ? 3.5 : 2);
+        // Mund
+        stroke(40, 20, 20); strokeWeight(1.5);
+        if (awake) line(3 + lean, hy + 4, 8 + lean, hy + 4 + (z.attacking ? sin(frameCount * 0.5) * 1.5 : 0));
+        noStroke();
+
+        // Vorderer Arm
+        push(); translate(3, -6 + bob); rotate(armAngle);
+        fill(mobColor(z, color(110, 160, 100))); rect(-2, 0, 5, 14, 2);
+        pop();
+      }
+
+      function drawScorpionBody(z) {
+        let t = z.anim;
+        let awake = z.awake && z.freeze <= 0;
+        let c = mobColor(z, color(150, 40, 30));
+        let dark = mobColor(z, color(100, 25, 20));
+        let wig = z.moving ? sin(t * 0.5) : 0;                      // Beinbewegung
+        let breathe = sin(frameCount * 0.07 + z.phase) * 0.6;       // atmet im Stand
+        let tailRaise = z.attacking ? sin(frameCount * 0.6) * 5 : 0; // beim Angriff sticht er zu
+
+        // Acht Beine in zwei Gruppen, die abwechselnd laufen
+        stroke(dark); strokeWeight(2);
+        for (let i = 0; i < 4; i++) {
+          let ph = (i % 2 == 0 ? wig : -wig) * 3;
+          let lx = -6 + i * 5;
+          line(lx, 3, lx + ph - 2, 11);
+          line(lx, -1, lx - ph - 2, -9);
+        }
+        noStroke();
+
+        // Schwanz: Glieder, die sich nach oben krümmen und bei Angriff wippen
+        let lift = awake ? 4 : 0;
+        for (let i = 0; i < 5; i++) {
+          let a = i / 4;
+          let tx = 8 + a * 8 + sin(a * PI) * 2;
+          let ty = -2 - a * (14 + lift) - sin(a * PI) * 3 + (a > 0.5 ? tailRaise * a * 0.6 : 0);
+          fill(i % 2 == 0 ? c : dark);
+          circle(tx, ty, 7 - a * 2);
+        }
+        // Stachel (gelb)
+        fill(255, 220, 0);
+        triangle(16 + tailRaise * 0.2, -14 - lift + tailRaise * 0.6, 22, -9 - lift, 18, -18 - lift + tailRaise * 0.6);
+
+        // Körper
+        fill(c); ellipse(2, 0 + breathe, 26, 15);
+        fill(dark);
+        ellipse(-2, -1 + breathe, 2, 11); ellipse(4, -1 + breathe, 2, 11); // Panzer-Streifen
+
+        // Scheren: öffnen und schließen beim Gehen und Angreifen
+        let open = awake ? (z.attacking ? 0.7 + sin(frameCount * 0.6) * 0.5 : 0.35 + wig * 0.15) : 0.1;
+        for (let s of [-1, 1]) {
+          push();
+          translate(-11, s * 5);
+          fill(c); ellipse(-4, 0, 9, 5);          // Armglied
+          push(); translate(-8, 0); rotate(s * open);
+          ellipse(-4, -s * 2, 9, 4);               // obere/untere Schere
+          pop();
+          pop();
+        }
+
+        // Kopf mit Augen: schlafend dunkel, wach rot
+        fill(awake ? color(255, 30, 30) : color(20));
+        circle(-9, -2 + breathe, 3);
+        circle(-9, 2 + breathe, 3);
+      }
+
+      function drawHud() {
+        // Große Lebensleiste oben links
+        textAlign(LEFT); textSize(14);
+        fill(0, 150); rect(10, 10, 220, 28, 6);
+        fill(70, 0, 0); rect(14, 14, 212, 20, 4);
+        let frac = max(player.hp, 0) / player.maxHp;
+        fill(frac > 0.3 ? color(210, 40, 40) : color(255, 120, 0)); rect(14, 14, 212 * frac, 20, 4);
+        fill(255); text("Leben " + ceil(max(player.hp, 0)) + " / " + player.maxHp, 20, 29);
+
+        // Textfarbe passend zum Hintergrund
+        let hell = level == 1;
+        fill(hell ? 40 : 255);
+        text("B = Zauberbuch | T = Level wählen | Laufen: WASD oder Pfeile", 10, 58);
+        text(zombies.length > 0 ? "Gegner übrig: " + zombies.length + " (töte alle, dann öffnet sich das Dorftor)" : "Alle Gegner tot! Geh ins Dorf.", 10, 78);
+        if (selectedSpell) {
+          fill(selectedSpell.color);
+          text("Bereit: " + selectedSpell.name + " (auf einen Gegner klicken)", 10, 98);
+        }
+
+        // Levelname oben rechts
+        fill(hell ? 40 : 255); textAlign(RIGHT);
+        text("Level " + (level + 1) + ": " + LEVELS[level].name, width - 10, 22);
+        textAlign(LEFT);
+
+        // Kurze Meldung am Levelanfang
+        let banner = LEVELS[level].banner;
+        if (bannerTimer > 0 && banner) {
+          let c = color(banner.color); c.setAlpha(min(255, bannerTimer * 3));
+          fill(c);
+          textAlign(CENTER); textSize(26);
+          text(banner.text, width / 2, 540);
+          textAlign(LEFT);
+        }
+
+        // Lebensleiste des Endbosses unten, sobald er wach ist
+        let boss = zombies.find(z => MOBS[z.type].boss && z.awake);
+        if (boss) {
+          let bm = MOBS[boss.type];
+          fill(0, 170); rect(200, 548, 400, 34, 6);
+          fill(70, 20, 0); rect(204, 552, 392, 14, 4);
+          fill(255, 110, 0); rect(204, 552, 392 * max(boss.hp, 0) / bm.hp, 14, 4);
+          fill(255); textAlign(CENTER); textSize(13);
+          text(bm.name, width / 2, 578);
+          textAlign(LEFT);
+        }
+      }
+
+      function endScreen(msg, col, hint) {
+        fill(0, 180); rect(0, 0, width, height);
+        fill(col); textAlign(CENTER); textSize(40);
+        text(msg, width / 2, height / 2);
+        fill(255); textSize(18); text(hint, width / 2, height / 2 + 40);
+        textAlign(LEFT);
+      }
+
+      // Position der Zauber im Menü
+      function spellRect(i) { return { x: 200, y: 148 + i * 52, w: 400, h: 46 }; }
+
+      function drawMenu() {
+        fill(0, 190); rect(0, 0, width, height);
+        fill(70, 40, 20); rect(150, 100, 500, 400, 12);
+        fill(240, 220, 170); textAlign(CENTER); textSize(28);
+        text("Zauberbuch", width / 2, 130);
+        for (let i = 0; i < spells.length; i++) {
+          let r = spellRect(i), s = spells[i];
+          fill(100, 65, 35); stroke(s.color); strokeWeight(selectedSpell === s ? 4 : 1);
+          rect(r.x, r.y, r.w, r.h, 8);
+          noStroke(); fill(s.color); textSize(18); text(s.name, width / 2, r.y + 20);
+          fill(240, 220, 170); textSize(12); text(s.desc, width / 2, r.y + 38);
+        }
+        textSize(14); text("Zauber anklicken, dann auf einen Gegner klicken", width / 2, 488);
+        textAlign(LEFT);
+      }
+
+      // Nach Ende eines Levels: weiter, neu starten oder von vorne
+      function nextAction() {
+        if (player.hp <= 0) startLevel(level);
+        else if (level < LEVELS.length - 1) startLevel(level + 1);
+        else startLevel(0);
+      }
+
+      function mousePressed() {
+        // Level-Menü: Level anklicken und dorthin springen
+        if (levelMenuOpen) {
+          for (let i = 0; i < LEVELS.length; i++) {
+            let r = levelRect(i);
+            if (mouseX > r.x && mouseX < r.x + r.w && mouseY > r.y && mouseY < r.y + r.h) {
+              levelMenuOpen = false;
+              startLevel(i);
+            }
+          }
+          return;
+        }
+        if (won || player.hp <= 0) { nextAction(); return; }
+        if (menuOpen) {
+          // Im Menü: Zauber auswählen und Buch schließen
+          for (let i = 0; i < spells.length; i++) {
+            let r = spellRect(i);
+            if (mouseX > r.x && mouseX < r.x + r.w && mouseY > r.y && mouseY < r.y + r.h) {
+              selectedSpell = spells[i];
+              menuOpen = false;
+            }
+          }
+          return;
+        }
+        // Außerhalb des Menüs: Gegner anklicken (Mausposition plus Kamera), Zauber wirken
+        if (!selectedSpell) return;
+        // Beschwörung braucht kein Ziel: der Lichtwolf erscheint neben dem Magier (höchstens 3 gleichzeitig)
+        if (selectedSpell.name == "Beschwörungszauber") {
+          if (allies.length >= 2) allies.shift();
+          allies.push({ x: player.x + player.facing * 30, y: player.y, hp: 8, maxHp: 8, life: 420, facing: player.facing, moving: false, attacking: false, anim: 0, phase: random(100), puff: 20 });
+          player.cast = 18;
+          return;
+        }
+        for (let z of zombies) {
+          if (dist(mouseX + camX, mouseY, z.x, z.y) < (MOBS[z.type].hitR || 20)) {
+            if (selectedSpell.name == "Feuerzauber") z.burn = 300;
+            if (selectedSpell.name == "Giftzauber") z.poison = 600;
+            if (selectedSpell.name == "Eiszauber") z.freeze = MOBS[z.type].boss ? 90 : 240; // Boss friert nur kurz
+            // Schwerkraft: ein Strudel an der Stelle des Gegners (2,5 Sekunden)
+            if (selectedSpell.name == "Schwerkraftzauber") vortices.push({ x: z.x, y: z.y, life: 150 });
+            if (selectedSpell.name == "Blitzzauber") {
+              z.hp -= 30; // sofortiger Schaden
+              bolts.push({ x: z.x, y: z.y, life: 14, seed: random(10) });
+            }
+            z.awake = true;
+            player.cast = 18; // Zauber-Animation
+            player.facing = z.x < player.x ? -1 : 1;
+            break;
+          }
+        }
+      }
+
+      function keyPressed() {
+        // T öffnet und schließt das Level-Menü (das Zauberbuch schließt sich dabei)
+        if (key === "t" || key === "T") { levelMenuOpen = !levelMenuOpen; menuOpen = false; return; }
+        if (levelMenuOpen) return;
+        if ((won || player.hp <= 0) && keyCode === ENTER) { nextAction(); return; }
+        if (key === "b" || key === "B") menuOpen = !menuOpen;
+      }
+    </script>
+  </body>
+</html>
